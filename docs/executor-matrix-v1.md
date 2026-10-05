@@ -4,7 +4,7 @@
 
 | 执行通道 | 真实模型 | 非交互调用 | 指定工作目录 | 读取仓库 | 修改文件 | 运行测试 | 权限控制 | 成本通道 | 当前判断 |
 |---|---|---|---|---|---|---|---|---|---|
-| Codex CLI | 是 | 是 | 是 | 是 | 待测 | 待测 | 是（已验证只读） | ChatGPT Plus 套餐额度 | 通过第一轮 |
+| Codex CLI | 是 | 是 | 是 | 是 | 是 | 待测 | 是（已验证只读与受控写入） | ChatGPT Plus 套餐额度 | 通过第二轮 |
 | Claude Code + DeepSeek | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | DeepSeek API | 待测 |
 | DeepSeek Harness | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | DeepSeek API | 待测 |
 | 豆包 CLI | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 豆包会员额度 | 待测 |
@@ -42,3 +42,24 @@
 2. 测试是否能运行测试命令
 3. 测试 Python 是否能自动调用 Codex CLI 并读取返回结果
 4. 再与其他执行通道做同标准对比
+
+
+## Codex CLI 第二轮记录｜受控写文件
+
+日期：2026-10-05
+
+测试命令：
+使用 `codex exec --sandbox workspace-write`，要求仅在 experiments/codex_write_test 内创建 hello.txt。
+
+结果：
+- 成功创建 experiments/codex_write_test/hello.txt
+- 文件内容为 Codex write test passed.
+- 未修改、删除或创建其他文件
+- Windows type 命令复查内容正确
+- workspace-write 权限模式有效
+
+结论：
+Codex CLI 已具备“在指定工作区内受控修改文件”的能力。
+
+下一步：
+测试 Codex CLI 是否能创建一个小型代码文件、创建测试、运行测试并根据结果汇报。
