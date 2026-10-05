@@ -8,7 +8,7 @@
 - DOING：正在实验
 - DONE：完成
 
-## Phase 0：理解多 Agent 团队
+## Milestone 0｜看懂多 Agent 团队
 
 | ID | 任务 | 状态 |
 |---|---|---|
@@ -21,11 +21,11 @@
 | L-007 | 理解本地运行、服务器运行的区别 | LEARNING |
 | L-008 | 设计 Human Gate 人类介入规则 | TODO |
 | L-009 | 明确五个 Agent 的职责与禁止事项 | TODO |
-| L-010 | 画出第一版多 Agent 工作流程 | TODO |
+| L-010 | 画出第一版多 Agent 工作流程 | DOING |
 
-## Phase 1：最小实验
+## Milestone 1｜最小三 Agent 闭环
 
-暂不开始，等待 Phase 0 达到 READY。
+前置条件：L-004、L-008、L-010 完成后即可进入，不等待固定日期。
 
 计划：
 - PM Agent
@@ -33,5 +33,4 @@
 - QA Agent
 
 目标：
-PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 通过汇报。
-
+PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再测 → PM 汇报。
