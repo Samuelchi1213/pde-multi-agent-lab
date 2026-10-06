@@ -80,6 +80,7 @@ def analyze_goal(goal: str, api_key: str | None = None):
         data = json.loads(resp.read().decode("utf-8"))
 
     result = json.loads(data["choices"][0]["message"]["content"])
+    result = normalize_analysis(result)
     return result, data.get("usage", {})
 
 
@@ -139,4 +140,76 @@ def refine_goal(goal: str, previous_analysis: dict, user_reply: str, api_key: st
         data = json.loads(resp.read().decode("utf-8"))
 
     result = json.loads(data["choices"][0]["message"]["content"])
+    result = normalize_analysis(result, previous_analysis)
     return result, data.get("usage", {})
+
+
+EXPECTED_KEYS = {
+    "task_level": "",
+    "summary": "",
+    "reason": "",
+    "required_agents": [],
+    "scope": [],
+    "out_of_scope": [],
+    "acceptance_criteria": [],
+    "questions": [],
+    "needs_owner_decision": False,
+    "owner_decision_reason": "",
+    "recommended_executor": "待动态路由",
+    "next_action": "",
+}
+
+
+def normalize_analysis(result: dict, previous: dict | None = None) -> dict:
+    if not isinstance(result, dict):
+        raise RuntimeError("模型返回不是 JSON 对象")
+
+    base = dict(EXPECTED_KEYS)
+    if previous:
+        for k in EXPECTED_KEYS:
+            if k in previous:
+                base[k] = previous[k]
+
+    # 兼容少量常见字段别名，避免模型轻微漂移导致整个草案清空
+    aliases = {
+        "level": "task_level",
+        "taskLevel": "task_level",
+        "agents": "required_agents",
+        "roles": "required_agents",
+        "acceptance": "acceptance_criteria",
+        "criteria": "acceptance_criteria",
+        "clarifying_questions": "questions",
+        "need_owner_decision": "needs_owner_decision",
+        "executor": "recommended_executor",
+        "next_step": "next_action",
+    }
+
+    merged = {}
+    for k, v in result.items():
+        target = aliases.get(k, k)
+        merged[target] = v
+
+    for k in EXPECTED_KEYS:
+        if k in merged:
+            base[k] = merged[k]
+
+    # 类型修正
+    for key in ["required_agents", "scope", "out_of_scope", "acceptance_criteria", "questions"]:
+        if not isinstance(base[key], list):
+            if base[key] in (None, ""):
+                base[key] = []
+            else:
+                base[key] = [str(base[key])]
+
+    base["needs_owner_decision"] = bool(base["needs_owner_decision"])
+
+    if base["task_level"] not in {"A", "B", "C", "D"}:
+        if previous and previous.get("task_level") in {"A", "B", "C", "D"}:
+            base["task_level"] = previous["task_level"]
+        else:
+            raise RuntimeError("模型返回缺少有效 task_level")
+
+    if not base["summary"]:
+        raise RuntimeError("模型返回缺少 summary")
+
+    return base
