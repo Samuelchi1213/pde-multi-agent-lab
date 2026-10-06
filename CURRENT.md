@@ -246,3 +246,25 @@ Human Gate 已从设计文档落地为可运行机制。
 4. 多执行器模型路由
 5. 中断恢复
 6. 群聊/可视化界面
+
+
+## 2026-10-06｜统一编排器 v1 首次完整运行成功
+
+本地运行：
+python orchestrator_v1/main.py
+
+结果：
+- 任务：学生返校状态判断
+- 最大自动返工：2
+- DeepSeek token 上限：8000
+- Python 独立验证退出码：0
+- verifier passed: 6 cases
+- DeepSeek 复核结论：pass
+- DeepSeek 累计 token：1424
+- 最终状态：任务完成
+
+结论：
+统一编排器已完成首次真实完整运行。
+
+下一步：
+检查 runtime 持久化状态文件，确认任务状态、调用次数、token 累计和历史交接是否被正确记录。
