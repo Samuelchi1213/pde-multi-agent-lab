@@ -302,6 +302,12 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     </div>
     <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
+    <div id="budgetAsk" class="card human" style="display:none;margin-top:14px">
+      <h4>需要追加少量预算</h4>
+      <div id="budgetAskText"></div>
+      <button onclick="approveBudget()" style="background:#166534">同意追加并继续</button>
+      <button onclick="declineBudget()" style="background:#6b7280">先暂停任务</button>
+    </div>
     <h4>分角色成本</h4>
     <pre id="roleUsage">暂无。</pre>
     <h4>团队时间线</h4>
@@ -633,6 +639,30 @@ async function startTeamExecution(){
   pollTeam();
 }
 
+async function approveBudget(){
+  if(!CURRENT_DRAFT_ID)return;
+  const r=await api('/api/team/budget',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID,decision:'approve'})
+  });
+  if(!r.ok){alert(r.error||'追加预算失败');return;}
+  document.getElementById('budgetAsk').style.display='none';
+  pollTeam();
+}
+
+async function declineBudget(){
+  if(!CURRENT_DRAFT_ID)return;
+  const r=await api('/api/team/budget',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID,decision:'decline'})
+  });
+  if(!r.ok){alert(r.error||'暂停失败');return;}
+  document.getElementById('budgetAsk').style.display='none';
+  pollTeam();
+}
+
 async function pollTeam(){
   if(!CURRENT_DRAFT_ID)return;
   const d=await api('/api/team/status?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID));
@@ -651,6 +681,17 @@ async function pollTeam(){
     document.getElementById('teamSavings').textContent=(pct>=0?pct+'%':'超出 '+Math.abs(pct)+'%');
   }else{
     document.getElementById('teamSavings').textContent='-';
+  }
+  const ask=document.getElementById('budgetAsk');
+  if(s.status==='等待预算确认' && s.budget_approval){
+    ask.style.display='block';
+    const q=s.budget_approval;
+    document.getElementById('budgetAskText').innerHTML=
+      '<p>'+escapeHtml(q.reason||'当前任务需要更多 token 才能继续。')+'</p>'
+      +'<p>已用：<b>'+Number(q.used||0)+'</b> / 当前预算：<b>'+Number(q.budget||0)
+      +'</b>，建议追加：<b>'+Number(q.requested_extra||0)+'</b> tokens。</p>';
+  }else{
+    ask.style.display='none';
   }
   document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
   document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
@@ -945,6 +986,69 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if self.path=="/api/team/budget":
+            draft_id=(data.get("draft_id") or "").strip()
+            decision=(data.get("decision") or "").strip()
+            if draft_id not in ANALYSES:
+                self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
+                return
+            state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+            if not state_path.exists():
+                self._json({"ok":False,"error":"未找到团队运行状态"},404)
+                return
+            state=json.loads(state_path.read_text(encoding="utf-8"))
+            req=state.get("budget_approval") or {}
+            if decision=="decline":
+                state["status"]="已暂停"
+                state["budget_approval"]=None
+                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":state}
+                self._json({"ok":True,"status":"已暂停"})
+                return
+            if decision!="approve":
+                self._json({"ok":False,"error":"未知预算决策"},400)
+                return
+
+            current_budget=int(req.get("budget") or state.get("deepseek_token_budget") or 16000)
+            extra=int(req.get("requested_extra") or 3000)
+            approved=min(current_budget+extra,30000)
+            draft=ANALYSES[draft_id]
+            draft["approved_token_budget"]=approved
+            state["budget_approval"]=None
+            state["status"]="准备继续"
+            state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+
+            with LOCK:
+                if TEAM_RUNS.get(draft_id,{}).get("running"):
+                    self._json({"ok":False,"error":"团队仍在运行"},409)
+                    return
+                TEAM_RUNS[draft_id]={"running":True,"state":state}
+
+            def resume_worker():
+                runner=None
+                try:
+                    runner=DynamicTeamRun(ROOT,draft_id,draft,get_deepseek_key())
+                    # 保留现有工作区，重新执行时 Codex 会基于同一目录继续；预算使用新上限。
+                    runner.state["deepseek_token_budget"]=approved
+                    runner.state["status"]="继续执行"
+                    runner.event("成本控制器","项目负责人已批准追加预算",{
+                        "new_budget":approved,
+                        "added":extra,
+                    })
+                    result=runner.run()
+                    with LOCK:
+                        TEAM_RUNS[draft_id]={"running":False,"state":result}
+                except Exception as exc:
+                    with LOCK:
+                        TEAM_RUNS[draft_id]={"running":False,"state":{
+                            "status":"执行失败",
+                            "timeline":[{"agent":"系统","action":"继续执行失败","detail":str(exc)}]
+                        }}
+            threading.Thread(target=resume_worker,daemon=True).start()
+            self._json({"ok":True,"new_budget":approved})
+            return
+
         if self.path=="/api/team/start":
             draft_id=(data.get("draft_id") or "").strip()
             api_key=(data.get("api_key") or get_deepseek_key()).strip()
@@ -978,14 +1082,18 @@ class Handler(BaseHTTPRequestHandler):
                     with LOCK:
                         TEAM_RUNS[draft_id]={"running":False,"state":state}
                 except Exception as exc:
-                    if runner is not None and "token 预算" in str(exc):
-                        runner.state["status"]="预算停止"
+                    if runner is not None and exc.__class__.__name__=="BudgetApprovalRequired":
+                        request={
+                            "role":getattr(exc,"role","当前智能体"),
+                            "used":getattr(exc,"used",runner.state.get("deepseek_tokens",0)),
+                            "budget":getattr(exc,"budget",runner.state.get("deepseek_token_budget",0)),
+                            "requested_extra":getattr(exc,"requested_extra",3000),
+                            "reason":getattr(exc,"reason",str(exc)),
+                        }
+                        runner.state["status"]="等待预算确认"
+                        runner.state["budget_approval"]=request
                         runner.state["current_agent"]=""
-                        runner.event("成本控制器","已停止后续调用",{
-                            "reason":str(exc),
-                            "used":runner.state.get("deepseek_tokens",0),
-                            "budget":runner.state.get("deepseek_token_budget",0),
-                        })
+                        runner.event("成本控制器","向项目负责人申请追加预算",request)
                         runner.state["current_agent"]=""
                         runner.save()
                         state=runner.state
