@@ -39,10 +39,10 @@ def run_codex():
         "cmd",
         "/c",
         codex_path,
+        "--ask-for-approval", "never",
         "exec",
         "--model", "gpt-5.6-sol",
         "--sandbox", "read-only",
-        "--ask-for-approval", "never",
         "--output-schema", str(SCHEMA_FILE),
         "--output-last-message", str(RESULT_FILE),
         "-"
