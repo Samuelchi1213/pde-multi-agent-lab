@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["success", "failed"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "important_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests_run": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_step": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "important_files",
+    "tests_run",
+    "next_step"
+  ]
+}
