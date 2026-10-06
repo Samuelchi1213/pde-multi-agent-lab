@@ -12,6 +12,7 @@ from urllib.parse import urlparse, parse_qs
 
 from coordinator import analyze_goal, refine_goal
 from team_executor import DynamicTeamRun
+from agent_profiles import load_agent_profiles
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -84,6 +85,49 @@ def executor_status():
             "label": "豆包 Ark API",
             "detail": "已配置，可后续接入自动路由" if (os.getenv("ARK_API_KEY") or "").strip() else "未配置，暂不计入自动执行器",
         },
+    }
+
+
+def git_update_status():
+    try:
+        local = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT, capture_output=True, text=True, timeout=20, check=False
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "fetch", "origin", "main"],
+            cwd=ROOT, capture_output=True, text=True, timeout=60, check=False
+        )
+        remote = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=ROOT, capture_output=True, text=True, timeout=20, check=False
+        ).stdout.strip()
+        return {
+            "ok": True,
+            "update_available": bool(local and remote and local != remote),
+            "local": local[:8],
+            "remote": remote[:8],
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def git_pull_update():
+    p = subprocess.run(
+        ["git", "pull", "--ff-only"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+        check=False,
+    )
+    return {
+        "ok": p.returncode == 0,
+        "returncode": p.returncode,
+        "stdout": p.stdout,
+        "stderr": p.stderr,
     }
 
 
@@ -193,6 +237,18 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   </div>
 
   <div class="card">
+    <h3>系统维护</h3>
+    <button onclick="checkUpdate()">检查更新</button>
+    <button id="updateBtn" onclick="applyUpdate()" style="background:#2563eb;display:none">立即更新</button>
+    <span id="updateBadge" class="badge">尚未检查</span>
+  </div>
+
+  <div class="card">
+    <h3>Agent 身份</h3>
+    <div id="agentProfiles" class="grid"></div>
+  </div>
+
+  <div class="card">
     <h3>告诉团队你现在想做什么</h3>
     <textarea id="goal" placeholder="例如：给辅导员工作台增加晚返学生提醒功能，但不要给学生造成太强的被监控感。"></textarea>
 
@@ -295,6 +351,7 @@ function escapeHtml(s){
 
 async function init(){
   await loadExecutors();
+  await loadAgentProfiles();
   const data=await api('/api/tasks');
   const sel=document.getElementById('task');
   for(const t of data.tasks){
@@ -305,6 +362,52 @@ async function init(){
   }
   sel.onchange=refresh;
   refresh();
+}
+
+async function loadAgentProfiles(){
+  const d=await api('/api/agents');
+  const grid=document.getElementById('agentProfiles');
+  const profiles=d.profiles||{};
+  grid.innerHTML=Object.entries(profiles).map(([name,p])=>{
+    return '<div class="stat"><strong>'+escapeHtml(name)+'</strong>'
+      +'<b style="font-size:13px">'+escapeHtml(p.executor||'')+'</b>'
+      +'<div style="margin-top:6px;font-size:13px">'+escapeHtml(p.role||'')+'</div></div>';
+  }).join('');
+}
+
+async function checkUpdate(){
+  const badge=document.getElementById('updateBadge');
+  badge.textContent='检查中...';
+  const d=await api('/api/update/status');
+  if(!d.ok){
+    badge.textContent='检查失败';
+    alert(d.error||'更新检查失败');
+    return;
+  }
+  if(d.update_available){
+    badge.textContent='发现新版本 '+d.remote;
+    document.getElementById('updateBtn').style.display='inline-block';
+  }else{
+    badge.textContent='已是最新版 '+d.local;
+    document.getElementById('updateBtn').style.display='none';
+  }
+}
+
+async function applyUpdate(){
+  const badge=document.getElementById('updateBadge');
+  const btn=document.getElementById('updateBtn');
+  btn.disabled=true;
+  badge.textContent='更新中...';
+  const d=await api('/api/update/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  btn.disabled=false;
+  if(!d.ok){
+    badge.textContent='更新失败';
+    alert((d.stderr||d.error||'更新失败'));
+    return;
+  }
+  badge.textContent='更新完成，请重启控制台';
+  btn.style.display='none';
+  alert('更新完成。请关闭黑色后台窗口并重新双击启动控制台。');
 }
 
 async function loadExecutors(){
@@ -611,6 +714,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"executors":executor_status()})
             return
 
+        if parsed.path=="/api/agents":
+            try:
+                profiles=load_agent_profiles()
+                self._json({"profiles":profiles})
+            except Exception as exc:
+                self._json({"error":str(exc)},500)
+            return
+
+        if parsed.path=="/api/update/status":
+            self._json(git_update_status())
+            return
+
         if parsed.path=="/api/tasks":
             self._json({"tasks":[{"id":k,"label":v["label"]} for k,v in TASKS.items()]})
             return
@@ -671,6 +786,11 @@ class Handler(BaseHTTPRequestHandler):
             data=json.loads(body.decode("utf-8"))
         except Exception:
             self._json({"ok":False,"error":"请求格式错误"},400)
+            return
+
+        if self.path=="/api/update/apply":
+            result=git_pull_update()
+            self._json(result,200 if result.get("ok") else 500)
             return
 
         if self.path=="/api/settings/deepseek":
