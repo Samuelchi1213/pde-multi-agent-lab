@@ -295,6 +295,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       <div class="stat">Codex 调用<b id="teamCodex">0</b></div>
       <div class="stat">DeepSeek tokens<b id="teamTokens">0</b></div>
       <div class="stat">较首次节省<b id="teamSavings">-</b></div>
+      <div class="stat">自动返工<b id="teamRework">0 / 2</b></div>
     </div>
     <div style="margin-top:14px;padding:10px;background:#fff7ed;border-radius:8px">
       当前安全范围：未指定真实目标仓库时，只在隔离工作区做原型，不修改现有产品。
@@ -641,6 +642,7 @@ async function pollTeam(){
   document.getElementById('teamStatus').textContent=s.status||'准备中';
   document.getElementById('currentAgent').textContent=s.current_agent||'-';
   document.getElementById('teamCodex').textContent=s.codex_calls||0;
+  document.getElementById('teamRework').textContent=(s.rework_count||0)+' / '+(s.max_reworks||2);
   const used=s.deepseek_tokens||0;
   document.getElementById('teamTokens').textContent=used;
   const baseline=37780;
