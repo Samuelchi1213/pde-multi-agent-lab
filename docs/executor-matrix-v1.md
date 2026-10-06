@@ -190,3 +190,30 @@ Codex CLI + Python 编排器 + DeepSeek API 已完成一次真实“开发 → �
 - rework 自动退回
 - 连续失败计数
 - Human Gate 自动暂停
+
+
+## 2026-10-06｜自动返工闭环
+
+场景：
+初始需求未明确空字符串边界，隐藏测试要求空字符串也应视为“未返校”。
+
+第1轮：
+- Codex 完成实现并通过自身 9 个测试
+- Python 隐藏测试退出码 1
+- DeepSeek 识别真实失败并返回 rework
+- Python 自动生成返工任务并重新调用 Codex
+
+第2轮：
+- Codex 修复空字符串处理
+- 新增回归测试
+- Codex 10 个单元测试通过
+- Python 隐藏测试退出码 0
+- DeepSeek 返回 pass
+
+DeepSeek 第2轮 token：
+- prompt 1395
+- completion 76
+- total 1471
+
+结论：
+已验证自动返工链路真实可用，不需要人工复制粘贴。
