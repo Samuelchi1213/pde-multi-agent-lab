@@ -48,7 +48,6 @@ def save_windows_user_env(name, value):
         raise RuntimeError("当前版本的一次配置仅支持 Windows")
 
     import winreg
-    import ctypes
 
     with winreg.OpenKey(
         winreg.HKEY_CURRENT_USER,
@@ -58,24 +57,8 @@ def save_windows_user_env(name, value):
     ) as key:
         winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
 
+    # 当前控制台立即生效；未来新开的终端/应用会读取用户环境变量。
     os.environ[name] = value
-
-    # 通知其他新启动程序环境变量已变化。
-    HWND_BROADCAST = 0xFFFF
-    WM_SETTINGCHANGE = 0x001A
-    SMTO_ABORTIFHUNG = 0x0002
-    try:
-        ctypes.windll.user32.SendMessageTimeoutW(
-            HWND_BROADCAST,
-            WM_SETTINGCHANGE,
-            0,
-            "Environment",
-            SMTO_ABORTIFHUNG,
-            3000,
-            None,
-        )
-    except Exception:
-        pass
 
 
 def executor_status():
@@ -343,18 +326,44 @@ async function loadExecutors(){
 }
 
 async function saveDeepSeekKey(){
-  const key=document.getElementById('key').value.trim();
+  const input=document.getElementById('key');
+  const badge=document.getElementById('keyBadge');
+  const key=input.value.trim();
   if(!key){alert('请输入 DeepSeek API Key');return;}
-  const r=await api('/api/settings/deepseek',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({api_key:key})
-  });
-  if(!r.ok){alert(r.error||'保存失败');return;}
-  document.getElementById('key').value='';
-  document.getElementById('keyBadge').textContent='已保存';
-  await loadExecutors();
-  alert('DeepSeek Key 已保存。以后重新打开控制台也会自动识别。');
+
+  badge.textContent='保存中...';
+
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),10000);
+
+  try{
+    const r=await api('/api/settings/deepseek',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:key}),
+      signal:controller.signal
+    });
+
+    if(!r.ok){
+      badge.textContent='保存失败';
+      alert(r.error||'保存失败');
+      return;
+    }
+
+    input.value='';
+    badge.textContent='已保存';
+    await loadExecutors();
+    alert('DeepSeek Key 已保存，当前控制台已立即生效。');
+  }catch(e){
+    badge.textContent='保存失败';
+    if(e && e.name==='AbortError'){
+      alert('保存超时。请把黑色后台窗口截图发给我。');
+    }else{
+      alert('保存失败：'+String(e));
+    }
+  }finally{
+    clearTimeout(timer);
+  }
 }
 
 async function analyzeGoal(){
