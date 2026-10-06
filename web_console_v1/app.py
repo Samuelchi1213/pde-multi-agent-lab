@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import threading
+import shutil
+import sys
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +38,72 @@ ANALYSES = {}
 LOCK = threading.Lock()
 
 
+def get_deepseek_key():
+    return (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+
+
+def save_windows_user_env(name, value):
+    """保存到当前 Windows 用户环境变量，并让当前控制台进程立即生效。"""
+    if os.name != "nt":
+        raise RuntimeError("当前版本的一次配置仅支持 Windows")
+
+    import winreg
+    import ctypes
+
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        "Environment",
+        0,
+        winreg.KEY_SET_VALUE,
+    ) as key:
+        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+
+    os.environ[name] = value
+
+    # 通知其他新启动程序环境变量已变化。
+    HWND_BROADCAST = 0xFFFF
+    WM_SETTINGCHANGE = 0x001A
+    SMTO_ABORTIFHUNG = 0x0002
+    try:
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            "Environment",
+            SMTO_ABORTIFHUNG,
+            3000,
+            None,
+        )
+    except Exception:
+        pass
+
+
+def executor_status():
+    doubao_path = Path(r"D:\豆包\Doubao\Doubao.exe")
+    return {
+        "codex": {
+            "connected": bool(shutil.which("codex.cmd") or shutil.which("codex")),
+            "label": "Codex CLI",
+            "detail": "使用 ChatGPT/Codex 现有额度" if (shutil.which("codex.cmd") or shutil.which("codex")) else "未检测到 Codex CLI",
+        },
+        "deepseek": {
+            "connected": bool(get_deepseek_key()),
+            "label": "DeepSeek API",
+            "detail": "已配置用户环境变量" if get_deepseek_key() else "尚未配置一次性 Key",
+        },
+        "doubao_desktop": {
+            "connected": doubao_path.exists(),
+            "label": "豆包工作",
+            "detail": "桌面客户端已安装，当前作为人工辅助席位" if doubao_path.exists() else "未检测到桌面客户端",
+        },
+        "doubao_ark": {
+            "connected": bool((os.getenv("ARK_API_KEY") or "").strip()),
+            "label": "豆包 Ark API",
+            "detail": "已配置，可后续接入自动路由" if (os.getenv("ARK_API_KEY") or "").strip() else "未配置，暂不计入自动执行器",
+        },
+    }
+
+
 def read_json(relpath):
     path = ROOT / relpath
     if not path.exists():
@@ -55,8 +123,9 @@ def tail_text(text, max_chars=8000):
 def run_task(task_id, api_key):
     cfg = TASKS[task_id]
     env = os.environ.copy()
-    if api_key:
-        env["DEEPSEEK_API_KEY"] = api_key
+    resolved_key = (api_key or get_deepseek_key()).strip()
+    if resolved_key:
+        env["DEEPSEEK_API_KEY"] = resolved_key
 
     cmd = [
         "python",
@@ -136,11 +205,23 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   <div class="sub">直接告诉团队你想做什么。项目协调智能体先理解、分级、组队，再决定下一步。</div>
 
   <div class="card">
+    <h3>执行器中心</h3>
+    <div id="executorGrid" class="grid"></div>
+  </div>
+
+  <div class="card">
     <h3>告诉团队你现在想做什么</h3>
     <textarea id="goal" placeholder="例如：给辅导员工作台增加晚返学生提醒功能，但不要给学生造成太强的被监控感。"></textarea>
 
-    <label>DeepSeek API Key（仅用于本次本地进程，不写入磁盘）</label>
-    <input id="key" type="password" placeholder="sk-...">
+    <div id="deepseekSetup" style="display:none">
+      <label>首次配置 DeepSeek API Key</label>
+      <input id="key" type="password" placeholder="只需配置一次，保存到 Windows 当前用户环境变量">
+      <button onclick="saveDeepSeekKey()" style="background:#0f766e">保存 DeepSeek Key</button>
+      <span id="keyBadge" class="badge">未配置</span>
+    </div>
+    <div id="deepseekReady" style="display:none;padding:10px;background:#ecfdf5;border-radius:8px">
+      DeepSeek：✅ 已连接。后续无需再填写 API Key。
+    </div>
 
     <button id="analyzeBtn" onclick="analyzeGoal()">让项目协调智能体分析</button>
     <span id="analyzeBadge" class="badge">等待输入</span>
@@ -178,6 +259,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     </div>
     <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
+    <h4>分角色成本</h4>
+    <pre id="roleUsage">暂无。</pre>
     <h4>团队时间线</h4>
     <pre id="teamTimeline">暂无。</pre>
   </div>
@@ -228,6 +311,7 @@ function escapeHtml(s){
 }
 
 async function init(){
+  await loadExecutors();
   const data=await api('/api/tasks');
   const sel=document.getElementById('task');
   for(const t of data.tasks){
@@ -240,9 +324,42 @@ async function init(){
   refresh();
 }
 
+async function loadExecutors(){
+  const d=await api('/api/executors');
+  const grid=document.getElementById('executorGrid');
+  const items=d.executors||{};
+  grid.innerHTML=Object.values(items).map(x=>{
+    const mark=x.connected?'✅':'⚪';
+    return '<div class="stat">'+mark+' '+escapeHtml(x.label)+'<b style="font-size:14px">'+escapeHtml(x.detail)+'</b></div>';
+  }).join('');
+
+  if(items.deepseek&&items.deepseek.connected){
+    document.getElementById('deepseekSetup').style.display='none';
+    document.getElementById('deepseekReady').style.display='block';
+  }else{
+    document.getElementById('deepseekSetup').style.display='block';
+    document.getElementById('deepseekReady').style.display='none';
+  }
+}
+
+async function saveDeepSeekKey(){
+  const key=document.getElementById('key').value.trim();
+  if(!key){alert('请输入 DeepSeek API Key');return;}
+  const r=await api('/api/settings/deepseek',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({api_key:key})
+  });
+  if(!r.ok){alert(r.error||'保存失败');return;}
+  document.getElementById('key').value='';
+  document.getElementById('keyBadge').textContent='已保存';
+  await loadExecutors();
+  alert('DeepSeek Key 已保存。以后重新打开控制台也会自动识别。');
+}
+
 async function analyzeGoal(){
   const goal=document.getElementById('goal').value.trim();
-  const key=document.getElementById('key').value;
+  const key=(document.getElementById('key')&&document.getElementById('key').value)||'';
 
   if(!goal){
     alert('先告诉团队你想做什么。');
@@ -312,7 +429,7 @@ function renderAnalysis(a, usage){
 
 async function refineGoal(){
   const reply=document.getElementById('ownerReply').value.trim();
-  const key=document.getElementById('key').value;
+  const key=(document.getElementById('key')&&document.getElementById('key').value)||'';
   if(!CURRENT_DRAFT_ID){alert('请先让项目协调智能体分析一次。');return;}
   if(!reply){alert('请输入你的补充说明。');return;}
 
@@ -361,7 +478,7 @@ async function confirmDraft(){
 
 async function startTeamExecution(){
   if(!CURRENT_DRAFT_ID){alert('请先确认任务草案。');return;}
-  const key=document.getElementById('key').value;
+  const key=(document.getElementById('key')&&document.getElementById('key').value)||'';
   const btn=document.getElementById('executeBtn');
   btn.disabled=true;
   document.getElementById('executeBadge').textContent='启动中';
@@ -392,6 +509,7 @@ async function pollTeam(){
   document.getElementById('currentAgent').textContent=s.current_agent||'-';
   document.getElementById('teamCodex').textContent=s.codex_calls||0;
   document.getElementById('teamTokens').textContent=s.deepseek_tokens||0;
+  document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
   document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
 
   const running=d.running;
@@ -402,7 +520,7 @@ async function pollTeam(){
 
 async function startTask(){
   const task=document.getElementById('task').value;
-  const key=document.getElementById('key').value;
+  const key=(document.getElementById('key')&&document.getElementById('key').value)||'';
   document.getElementById('start').disabled=true;
 
   const r=await api('/api/start',{
@@ -480,6 +598,10 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
 
+        if parsed.path=="/api/executors":
+            self._json({"executors":executor_status()})
+            return
+
         if parsed.path=="/api/tasks":
             self._json({"tasks":[{"id":k,"label":v["label"]} for k,v in TASKS.items()]})
             return
@@ -542,9 +664,22 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":False,"error":"请求格式错误"},400)
             return
 
+        if self.path=="/api/settings/deepseek":
+            api_key=(data.get("api_key") or get_deepseek_key()).strip()
+            if not api_key:
+                self._json({"ok":False,"error":"Key 不能为空"},400)
+                return
+            try:
+                save_windows_user_env("DEEPSEEK_API_KEY",api_key)
+            except Exception as exc:
+                self._json({"ok":False,"error":str(exc)},500)
+                return
+            self._json({"ok":True})
+            return
+
         if self.path=="/api/analyze":
             goal=(data.get("goal") or "").strip()
-            api_key=(data.get("api_key") or "").strip()
+            api_key=(data.get("api_key") or get_deepseek_key()).strip()
 
             if not goal:
                 self._json({"ok":False,"error":"请输入你的目标"},400)
@@ -574,7 +709,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path=="/api/refine":
             draft_id=(data.get("draft_id") or "").strip()
             user_reply=(data.get("user_reply") or "").strip()
-            api_key=(data.get("api_key") or "").strip()
+            api_key=(data.get("api_key") or get_deepseek_key()).strip()
 
             if draft_id not in ANALYSES:
                 self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
@@ -636,7 +771,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path=="/api/team/start":
             draft_id=(data.get("draft_id") or "").strip()
-            api_key=(data.get("api_key") or "").strip()
+            api_key=(data.get("api_key") or get_deepseek_key()).strip()
 
             if draft_id not in ANALYSES:
                 self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
@@ -685,7 +820,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         task_id=data.get("task_id")
-        api_key=(data.get("api_key") or "").strip()
+        api_key=(data.get("api_key") or get_deepseek_key()).strip()
 
         if task_id not in TASKS:
             self._json({"ok":False,"error":"未知任务"},400)
