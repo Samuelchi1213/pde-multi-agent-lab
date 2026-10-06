@@ -16,7 +16,13 @@ ROLE_PROMPTS = {
 重点：模块边界、数据结构、接口、权限、隐私、失败处理、实现顺序。
 如果没有真实目标项目代码，只设计隔离原型方案，不假装已经修改真实系统。只保留实现所需的信息，避免重复产品背景。只返回 JSON。""",
     "测试智能体": """你是独立测试智能体。你必须依据已确认草案、产品/架构产物、真实工作区文件和测试证据复核。
-不要相信开发智能体自述。判断 pass / rework / need_human。优先依据验收标准和测试证据，不重复转述全部上下文。只返回 JSON。""",
+不要相信开发智能体自述。判断 pass / rework / need_human。优先依据验收标准和测试证据，不重复转述全部上下文。
+只返回 JSON，至少包含：
+- status: pass / rework / need_human
+- summary: 简短结论
+- findings: 证据化问题列表
+- rework_instructions: 仅当 rework 时给开发智能体的具体修改要求
+- human_reason: 仅当 need_human 时说明为什么必须由项目负责人决定。""",
 }
 
 
@@ -153,10 +159,15 @@ class DynamicTeamRun:
             "team": draft["analysis"].get("required_agents", []),
             "current_agent": "",
             "deepseek_tokens": 0,
+            "deepseek_normal_budget": 16000,
             "deepseek_token_budget": 16000,
+            "deepseek_absolute_budget": 23000,
+            "rework_budget_step": 3500,
             "role_usage": {},
             "codex_calls": 0,
             "deepseek_calls": 0,
+            "rework_count": 0,
+            "max_reworks": 2,
             "timeline": [],
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "workspace": str(self.workspace.relative_to(root)),
@@ -202,6 +213,95 @@ class DynamicTeamRun:
             raise BudgetExceeded("DeepSeek token 预算超限，已停止后续模型调用")
 
         return result, usage
+
+    def extend_budget_for_rework(self, round_no):
+        new_budget = min(
+            self.state["deepseek_normal_budget"] + self.state["rework_budget_step"] * round_no,
+            self.state["deepseek_absolute_budget"],
+        )
+        if new_budget > self.state["deepseek_token_budget"]:
+            self.state["deepseek_token_budget"] = new_budget
+            self.event("成本控制器", "为自动返工临时扩展预算", {
+                "round": round_no,
+                "budget": new_budget,
+                "absolute_budget": self.state["deepseek_absolute_budget"],
+            })
+
+    def review_delivery(self, analysis, delivery, test_evidence, previous_review=None, round_no=0):
+        self.event("测试智能体", "开始独立复核" if round_no == 0 else f"开始第{round_no}轮返工复核")
+        review_payload = {
+            "acceptance_criteria": analysis.get("acceptance_criteria", []),
+            "scope": analysis.get("scope", []),
+            "developer_delivery": delivery,
+            "workspace_files": read_workspace(
+                self.workspace,
+                total_limit=16000 if round_no == 0 else 8000,
+                per_file_limit=5000 if round_no == 0 else 3000,
+            ),
+            "test_evidence": test_evidence,
+            "previous_review": previous_review if round_no > 0 else None,
+            "review_round": round_no,
+            "safety_boundary": self.state["safety_note"],
+        }
+        qa_profile = get_agent_profile("测试智能体")
+        qa_prompt = ROLE_PROMPTS["测试智能体"] + "\n\n岗位边界：" + json.dumps(
+            qa_profile, ensure_ascii=False
+        )
+        if round_no > 0:
+            qa_prompt += (
+                "\n这是返工后的复核。只检查上一轮问题是否解决以及是否引入新的验收阻断问题，"
+                "不要重新撰写完整项目评审。"
+            )
+        review, _ = self.use_ds("测试智能体", qa_prompt, review_payload)
+        review_file = self.artifacts / (
+            "qa_review.json" if round_no == 0 else f"qa_review_rework_{round_no}.json"
+        )
+        review_file.write_text(
+            json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self.event(
+            "测试智能体",
+            "复核完成" if round_no == 0 else f"第{round_no}轮返工复核完成",
+            review,
+        )
+        return review
+
+    def run_rework(self, analysis, review, round_no):
+        self.state["rework_count"] = round_no
+        self.state["status"] = "自动返工中"
+        self.extend_budget_for_rework(round_no)
+        self.event("项目协调智能体", f"启动第{round_no}轮自动返工", {
+            "reason": review.get("summary", ""),
+            "instructions": review.get("rework_instructions", review.get("findings", [])),
+        })
+
+        developer_profile = get_agent_profile("开发智能体")
+        prompt = f"""
+你是开发智能体。当前是第 {round_no} 轮自动返工。
+只允许修改当前隔离工作目录内的文件。
+
+岗位边界：
+{json.dumps(developer_profile, ensure_ascii=False, indent=2)}
+
+验收标准：
+{json.dumps(analysis.get("acceptance_criteria", []), ensure_ascii=False, indent=2)}
+
+测试智能体上一轮结论：
+{json.dumps(review, ensure_ascii=False, indent=2)}
+
+要求：
+- 先检查当前工作区现有实现，不要从头重做。
+- 只修复测试智能体指出的、与验收标准相关的问题。
+- 不要扩大需求范围。
+- 必须实际运行可用测试。
+- 按给定 JSON Schema 返回交付。
+"""
+        result_file = self.run_dir / f"codex_rework_{round_no}.json"
+        self.event("开发智能体", f"开始第{round_no}轮返工")
+        delivery = run_codex(self.workspace, prompt, self.schema, result_file)
+        self.state["codex_calls"] += 1
+        self.event("开发智能体", f"第{round_no}轮返工交付完成", delivery)
+        return delivery
 
     def run(self):
         analysis = self.draft["analysis"]
@@ -284,27 +384,48 @@ class DynamicTeamRun:
 
         review = None
         if "测试智能体" in team:
-            self.event("测试智能体", "开始独立复核")
-            review_payload = {
-                "acceptance_criteria": analysis.get("acceptance_criteria", []),
-                "scope": analysis.get("scope", []),
-                "developer_delivery": delivery,
-                "workspace_files": read_workspace(self.workspace),
-                "test_evidence": test_evidence,
-                "safety_boundary": self.state["safety_note"],
-            }
-            qa_profile = get_agent_profile("测试智能体")
-            qa_prompt = ROLE_PROMPTS["测试智能体"] + "\n\n岗位边界：" + json.dumps(qa_profile, ensure_ascii=False)
-            review, _ = self.use_ds("测试智能体", qa_prompt, review_payload)
-            (self.artifacts / "qa_review.json").write_text(
-                json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            self.event("测试智能体", "复核完成", review)
+            review = self.review_delivery(analysis, delivery, test_evidence)
+
+            while (
+                review
+                and review.get("status") == "rework"
+                and self.state["rework_count"] < self.state["max_reworks"]
+            ):
+                round_no = self.state["rework_count"] + 1
+                previous_review = review
+                delivery = self.run_rework(analysis, previous_review, round_no)
+
+                test_evidence = run_python_tests(self.workspace)
+                self.event(
+                    "系统验证器",
+                    f"第{round_no}轮返工后重新运行测试",
+                    test_evidence,
+                )
+
+                review = self.review_delivery(
+                    analysis,
+                    delivery,
+                    test_evidence,
+                    previous_review=previous_review,
+                    round_no=round_no,
+                )
 
         if review and review.get("status") == "need_human":
             self.state["status"] = "等待人工决策"
+            self.event("项目协调智能体", "升级给项目负责人", {
+                "reason": review.get("human_reason") or review.get("summary", "需要人工决策")
+            })
         elif review and review.get("status") == "rework":
-            self.state["status"] = "需要返工"
+            self.state["status"] = "等待人工决策"
+            self.event("项目协调智能体", "自动返工次数已达上限", {
+                "rework_count": self.state["rework_count"],
+                "max_reworks": self.state["max_reworks"],
+                "remaining_issues": review.get("findings", []),
+                "next_action": "请项目负责人决定继续返工、调整范围或停止任务。",
+            })
+        elif review and review.get("status") not in (None, "pass"):
+            self.state["status"] = "等待人工决策"
+            self.event("项目协调智能体", "测试结论结构异常，升级人工确认", review)
         else:
             self.state["status"] = "已完成"
 
