@@ -100,7 +100,7 @@ def run_task(task_id, api_key):
             })
 
 
-INDEX_HTML = """<!doctype html>
+INDEX_HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
