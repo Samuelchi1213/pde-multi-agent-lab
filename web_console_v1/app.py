@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 from coordinator import analyze_goal, refine_goal
+from team_executor import DynamicTeamRun
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -30,6 +31,7 @@ TASKS = {
 }
 
 RUNS = {}
+TEAM_RUNS = {}
 ANALYSES = {}
 LOCK = threading.Lock()
 
@@ -161,6 +163,23 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       <button id="confirmBtn" onclick="confirmDraft()" style="background:#166534;margin-left:8px">确认任务草案</button>
       <span id="draftBadge" class="badge">尚未确认</span>
     </div>
+  </div>
+
+  <div id="teamCard" class="card" style="display:none">
+    <h3>团队执行</h3>
+    <div class="grid">
+      <div class="stat">执行状态<b id="teamStatus">未启动</b></div>
+      <div class="stat">当前智能体<b id="currentAgent">-</b></div>
+      <div class="stat">Codex 调用<b id="teamCodex">0</b></div>
+      <div class="stat">DeepSeek tokens<b id="teamTokens">0</b></div>
+    </div>
+    <div style="margin-top:14px;padding:10px;background:#fff7ed;border-radius:8px">
+      当前安全范围：未指定真实目标仓库时，只在隔离工作区做原型，不修改现有产品。
+    </div>
+    <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button>
+    <span id="executeBadge" class="badge">等待草案确认</span>
+    <h4>团队时间线</h4>
+    <pre id="teamTimeline">暂无。</pre>
   </div>
 
   <div class="card">
@@ -335,7 +354,50 @@ async function confirmDraft(){
   });
   if(!r.ok){alert(r.error||'确认失败');return;}
   document.getElementById('draftBadge').textContent='已确认';
-  alert('任务草案已确认。下一阶段会把它接入动态组队与自动执行。');
+  document.getElementById('teamCard').style.display='block';
+  document.getElementById('executeBadge').textContent='可启动';
+  alert('任务草案已确认。现在可以启动动态团队执行。');
+}
+
+async function startTeamExecution(){
+  if(!CURRENT_DRAFT_ID){alert('请先确认任务草案。');return;}
+  const key=document.getElementById('key').value;
+  const btn=document.getElementById('executeBtn');
+  btn.disabled=true;
+  document.getElementById('executeBadge').textContent='启动中';
+
+  const r=await api('/api/team/start',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID,api_key:key})
+  });
+
+  if(!r.ok){
+    btn.disabled=false;
+    document.getElementById('executeBadge').textContent='启动失败';
+    alert(r.error||'团队执行启动失败');
+    return;
+  }
+  document.getElementById('executeBadge').textContent='执行中';
+  pollTeam();
+}
+
+async function pollTeam(){
+  if(!CURRENT_DRAFT_ID)return;
+  const d=await api('/api/team/status?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID));
+  if(!d.ok)return;
+  const s=d.state||{};
+  document.getElementById('teamCard').style.display='block';
+  document.getElementById('teamStatus').textContent=s.status||'准备中';
+  document.getElementById('currentAgent').textContent=s.current_agent||'-';
+  document.getElementById('teamCodex').textContent=s.codex_calls||0;
+  document.getElementById('teamTokens').textContent=s.deepseek_tokens||0;
+  document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
+
+  const running=d.running;
+  document.getElementById('executeBtn').disabled=!!running;
+  document.getElementById('executeBadge').textContent=running?'执行中':(s.status||'已结束');
+  if(running)setTimeout(pollTeam,2000);
 }
 
 async function startTask(){
@@ -445,6 +507,23 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path=="/api/team/status":
+            q=parse_qs(parsed.query)
+            draft_id=q.get("draft_id",[""])[0]
+            with LOCK:
+                meta=TEAM_RUNS.get(draft_id,{})
+                running=bool(meta.get("running"))
+                state=dict(meta.get("state") or {})
+            if not state:
+                state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+                if state_path.exists():
+                    try:
+                        state=json.loads(state_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        state={}
+            self._json({"ok":True,"running":running,"state":state})
+            return
+
         self.send_error(404)
 
     def do_POST(self):
@@ -547,6 +626,52 @@ class Handler(BaseHTTPRequestHandler):
                 "draft_id":draft_id,
                 "saved_to":str(out_file.relative_to(ROOT))
             })
+            return
+
+        if self.path=="/api/team/start":
+            draft_id=(data.get("draft_id") or "").strip()
+            api_key=(data.get("api_key") or "").strip()
+
+            if draft_id not in ANALYSES:
+                self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
+                return
+
+            draft=ANALYSES[draft_id]
+            if not draft.get("confirmed"):
+                self._json({"ok":False,"error":"请先确认任务草案"},400)
+                return
+
+            if not api_key and not os.getenv("DEEPSEEK_API_KEY"):
+                self._json({"ok":False,"error":"请输入 DeepSeek API Key"},400)
+                return
+
+            key=api_key or os.getenv("DEEPSEEK_API_KEY")
+
+            with LOCK:
+                if TEAM_RUNS.get(draft_id,{}).get("running"):
+                    self._json({"ok":False,"error":"团队正在执行"},409)
+                    return
+                TEAM_RUNS[draft_id]={"running":True,"state":{"status":"准备中","timeline":[]}}
+
+            def worker():
+                try:
+                    runner=DynamicTeamRun(ROOT,draft_id,draft,key)
+                    state=runner.run()
+                    with LOCK:
+                        TEAM_RUNS[draft_id]={"running":False,"state":state}
+                except Exception as exc:
+                    with LOCK:
+                        TEAM_RUNS[draft_id]={
+                            "running":False,
+                            "state":{
+                                "status":"执行失败",
+                                "current_agent":"",
+                                "timeline":[{"agent":"系统","action":"执行失败","detail":str(exc)}]
+                            }
+                        }
+
+            threading.Thread(target=worker,daemon=True).start()
+            self._json({"ok":True,"draft_id":draft_id})
             return
 
         if self.path!="/api/start":
