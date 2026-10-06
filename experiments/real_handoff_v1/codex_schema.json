@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["success", "failed"]
+    },
+    "project_state": {
+      "type": "string"
+    },
+    "completed": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "next_step": {
+      "type": "string"
+    },
+    "risks": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "required": ["status", "project_state", "completed", "next_step", "risks"]
+}
