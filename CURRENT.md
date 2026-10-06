@@ -268,3 +268,23 @@ python orchestrator_v1/main.py
 
 下一步：
 检查 runtime 持久化状态文件，确认任务状态、调用次数、token 累计和历史交接是否被正确记录。
+
+
+## 2026-10-06｜统一编排器持久化状态验证成功
+
+已检查 orchestrator_v1/runtime/TASK-DEMO-001.state.json。
+
+确认记录：
+- status：已完成
+- rework_count：0
+- codex_calls：1
+- deepseek_calls：1
+- deepseek_tokens：1424
+- history：完整记录项目协调器调用 Codex、Codex 交付、Python 独立验证、DeepSeek 复核、项目协调器任务完成
+
+结论：
+统一编排器已具备持久化任务状态，智能体协作不再依赖聊天记忆。
+
+发现问题：
+- Windows CMD 直接 type UTF-8 JSON 时中文显示乱码。
+- 数据本身有效，属于终端编码显示问题。
