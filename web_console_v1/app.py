@@ -6,7 +6,9 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse\n\nfrom coordinator import analyze_goal
+from urllib.parse import urlparse
+
+from coordinator import analyze_goal
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
