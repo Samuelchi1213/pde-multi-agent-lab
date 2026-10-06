@@ -1,0 +1,17 @@
+{
+  "id": "TASK-DEMO-001",
+  "title": "学生返校状态判断",
+  "goal": "实现 determine_return_status(expected_return, attendance_time)，根据预计返校时间和实际考勤时间返回正常、晚返或未返校。",
+  "workspace": "orchestrator_v1/workspaces/TASK-DEMO-001",
+  "acceptance_criteria": [
+    "attendance_time 为 None 或空字符串时返回 未返校",
+    "attendance_time 小于或等于 expected_return 时返回 正常",
+    "attendance_time 大于 expected_return 时返回 晚返",
+    "时间格式为 YYYY-MM-DD HH:MM",
+    "使用 Python 标准库",
+    "开发智能体需要自行创建并运行测试"
+  ],
+  "verifier": "orchestrator_v1/verifiers/return_status_verifier.py",
+  "max_rework": 2,
+  "max_deepseek_tokens": 8000
+}
