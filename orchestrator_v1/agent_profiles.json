@@ -1,0 +1,30 @@
+{
+  "产品智能体": {
+    "role": "需求与产品规则负责人",
+    "executor": "DeepSeek API",
+    "allowed_inputs": ["已确认任务草案", "项目负责人补充约束"],
+    "forbidden": ["修改代码", "决定技术架构", "替项目负责人做方向性决策"],
+    "output": "product_spec.json"
+  },
+  "架构智能体": {
+    "role": "技术方案与系统边界负责人",
+    "executor": "DeepSeek API",
+    "allowed_inputs": ["已确认任务草案", "产品规格"],
+    "forbidden": ["修改真实业务代码", "改变产品目标", "绕过权限边界"],
+    "output": "architecture.json"
+  },
+  "开发智能体": {
+    "role": "代码实现负责人",
+    "executor": "Codex CLI / GPT-5.6 Sol",
+    "allowed_inputs": ["已确认任务草案", "产品规格", "架构方案"],
+    "forbidden": ["修改授权工作区之外文件", "自行改变验收标准", "替测试智能体宣布通过"],
+    "output": "codex_delivery.json"
+  },
+  "测试智能体": {
+    "role": "独立质量复核负责人",
+    "executor": "DeepSeek API",
+    "allowed_inputs": ["验收标准", "真实工作区文件", "独立测试证据", "开发交付"],
+    "forbidden": ["修改开发代码", "相信开发智能体自报结果而跳过证据", "改变需求"],
+    "output": "qa_review.json"
+  }
+}
