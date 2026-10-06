@@ -288,3 +288,36 @@ python orchestrator_v1/main.py
 发现问题：
 - Windows CMD 直接 type UTF-8 JSON 时中文显示乱码。
 - 数据本身有效，属于终端编码显示问题。
+
+
+## 2026-10-06｜统一编排器人工决策文件验证成功
+
+使用 TASK-HUMAN-001 验证统一编排器的人工决策路径。
+
+实际路径：
+
+第1轮：
+- 独立验证失败：No module named 'validator'
+- DeepSeek 正确返回 rework
+- 系统自动将复核意见交回 Codex
+
+第2轮：
+- 代码验证通过：code verifier passed: 4 cases
+- 仅剩外部批准文件 approvals/approval_token.txt 缺失
+- DeepSeek 正确返回 need_human
+- 统一编排器生成结构化人工决策包
+- 系统停止自动推进
+
+决策包包含：
+- task_id
+- status=等待人工决策
+- reason
+- issues
+- requested_action
+- verifier_evidence
+- options
+
+结论：
+统一编排器已能正确区分“代码问题先返工”和“外部权限/资源问题再升级人工决策”。
+
+Milestone 4 统一编排器闭环完成。
