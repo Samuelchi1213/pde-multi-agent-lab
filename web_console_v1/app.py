@@ -307,10 +307,20 @@ async function refineGoal(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({draft_id:CURRENT_DRAFT_ID,user_reply:reply,api_key:key})
     });
-    if(!r.ok){alert(r.error||'更新失败');badge.textContent='更新失败';return;}
-    renderAnalysis(r.analysis||{}, r.usage||{});
+    if(!r.ok){
+      alert(r.error||'更新失败');
+      badge.textContent='更新失败，已保留上一版草案';
+      return;
+    }
+    const a=r.analysis||{};
+    if(!a.task_level || !a.summary){
+      alert('协调智能体返回结构异常，已保留上一版草案。');
+      badge.textContent='更新失败，已保留上一版草案';
+      return;
+    }
+    renderAnalysis(a, r.usage||{});
     document.getElementById('ownerReply').value='';
-    badge.textContent=(r.analysis.questions||[]).length?'仍有待确认':'可确认任务草案';
+    badge.textContent=(a.questions||[]).length?'仍有待确认':'可确认任务草案';
   }finally{
     btn.disabled=false;
   }
