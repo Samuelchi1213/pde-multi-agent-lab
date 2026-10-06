@@ -6,7 +6,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse\n\nfrom coordinator import analyze_goal
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -130,9 +130,6 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   <div class="card">
     <label>选择任务</label>
     <select id="task"></select>
-
-    <label>DeepSeek API Key（仅保存在本次本地进程内，不写入磁盘）</label>
-    <input id="key" type="password" placeholder="sk-...">
     <button id="start" onclick="startTask()">开始执行</button>
     <span id="runBadge" class="badge">未运行</span>
   </div>
@@ -173,6 +170,54 @@ async function init(){
   }
   sel.onchange=refresh;
   refresh();
+}
+
+async function analyzeGoal(){
+  const goal=document.getElementById('goal').value.trim();
+  const key=document.getElementById('key').value;
+  if(!goal){alert('先告诉团队你想做什么。');return;}
+
+  const btn=document.getElementById('analyzeBtn');
+  const badge=document.getElementById('analyzeBadge');
+  btn.disabled=true; badge.textContent='分析中';
+
+  const r=await api('/api/analyze',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({goal:goal,api_key:key})
+  });
+
+  btn.disabled=false;
+  if(!r.ok){badge.textContent='分析失败';alert(r.error||'分析失败');return;}
+
+  badge.textContent='分析完成';
+  const a=r.analysis;
+  document.getElementById('analysisCard').style.display='block';
+  document.getElementById('taskLevel').textContent=a.task_level||'-';
+  document.getElementById('agentCount').textContent=(a.required_agents||[]).length;
+  document.getElementById('ownerDecision').textContent=a.needs_owner_decision?'是':'否';
+  document.getElementById('analysisTokens').textContent=(r.usage&&r.usage.total_tokens)||0;
+
+  const sections=[
+    ['我的理解',a.summary],
+    ['为什么这样分级',a.reason],
+    ['建议参与的智能体',(a.required_agents||[]).join('、')||'无'],
+    ['本次范围',(a.scope||[]).map(x=>'• '+x).join('<br>')],
+    ['暂不包含',(a.out_of_scope||[]).map(x=>'• '+x).join('<br>')],
+    ['验收标准',(a.acceptance_criteria||[]).map(x=>'• '+x).join('<br>')],
+    ['需要你补充的问题',(a.questions||[]).map(x=>'• '+x).join('<br>')||'暂无'],
+    ['建议执行通道',a.recommended_executor||'待动态路由'],
+    ['下一步',a.next_action]
+  ];
+
+  if(a.needs_owner_decision){
+    sections.splice(7,0,['为什么需要你拍板',a.owner_decision_reason||'存在需要项目负责人决定的问题']);
+  }
+
+  document.getElementById('analysisText').innerHTML=sections
+    .filter(x=>x[1])
+    .map(x=>'<h4>'+escapeHtml(String(x[0]))+'</h4><div>'+String(x[1])+'</div>')
+    .join('');
 }
 
 async function startTask(){
@@ -274,16 +319,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        if self.path != "/api/start":
-            self.send_error(404)
-            return
-
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         try:
             data = json.loads(body.decode("utf-8"))
         except Exception:
             self._json({"ok": False, "error": "请求格式错误"}, 400)
+            return
+
+        if self.path == "/api/analyze":
+            goal = (data.get("goal") or "").strip()
+            api_key = (data.get("api_key") or "").strip()
+            if not goal:
+                self._json({"ok": False, "error": "请输入你的目标"}, 400)
+                return
+            try:
+                analysis, usage = analyze_goal(goal, api_key)
+            except Exception as exc:
+                self._json({"ok": False, "error": str(exc)}, 500)
+                return
+
+            draft_id = f"DRAFT-{int(time.time())}"
+            ANALYSES[draft_id] = {
+                "goal": goal,
+                "analysis": analysis,
+                "usage": usage,
+            }
+            self._json({
+                "ok": True,
+                "draft_id": draft_id,
+                "analysis": analysis,
+                "usage": usage,
+            })
+            return
+
+        if self.path != "/api/start":
+            self.send_error(404)
             return
 
         task_id = data.get("task_id")
