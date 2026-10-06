@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+
+# Unified orchestrator runtime
+orchestrator_v1/runtime/
+orchestrator_v1/*.result.json
+
+# Local experiment outputs
+experiments/**/codex_result.json
+experiments/**/codex_delivery.json
