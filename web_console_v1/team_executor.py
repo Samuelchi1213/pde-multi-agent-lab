@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import urllib.request
+from agent_profiles import get_agent_profile
 from pathlib import Path
 from datetime import datetime
 
@@ -219,7 +220,9 @@ class DynamicTeamRun:
 
         if "产品智能体" in team:
             self.event("产品智能体", "开始整理产品规格")
-            product_spec, _ = self.use_ds("产品智能体", ROLE_PROMPTS["产品智能体"], {
+            product_profile = get_agent_profile("产品智能体")
+            product_prompt = ROLE_PROMPTS["产品智能体"] + "\n\n岗位边界：" + json.dumps(product_profile, ensure_ascii=False)
+            product_spec, _ = self.use_ds("产品智能体", product_prompt, {
                 "confirmed_analysis": analysis,
                 "owner_constraints": self.draft.get("conversation", [])[-2:],
             })
@@ -230,9 +233,11 @@ class DynamicTeamRun:
 
         if "架构智能体" in team:
             self.event("架构智能体", "开始设计技术方案")
+            architecture_profile = get_agent_profile("架构智能体")
+            architecture_prompt = ROLE_PROMPTS["架构智能体"] + "\n\n岗位边界：" + json.dumps(architecture_profile, ensure_ascii=False)
             architecture, _ = self.use_ds(
                 "架构智能体",
-                ROLE_PROMPTS["架构智能体"],
+                architecture_prompt,
                 {
                     "confirmed_analysis": analysis,
                     "product_spec": product_spec,
@@ -246,8 +251,12 @@ class DynamicTeamRun:
         delivery = None
         if "开发智能体" in team:
             self.event("开发智能体", "开始在隔离工作区实现原型")
+            developer_profile = get_agent_profile("开发智能体")
             prompt = f"""
 你是开发智能体。只允许在当前隔离工作目录内工作。
+岗位边界：
+{json.dumps(developer_profile, ensure_ascii=False, indent=2)}
+
 
 这是项目负责人已经确认的任务草案：
 {json.dumps(analysis, ensure_ascii=False, indent=2)}
@@ -284,7 +293,9 @@ class DynamicTeamRun:
                 "test_evidence": test_evidence,
                 "safety_boundary": self.state["safety_note"],
             }
-            review, _ = self.use_ds("测试智能体", ROLE_PROMPTS["测试智能体"], review_payload)
+            qa_profile = get_agent_profile("测试智能体")
+            qa_prompt = ROLE_PROMPTS["测试智能体"] + "\n\n岗位边界：" + json.dumps(qa_profile, ensure_ascii=False)
+            review, _ = self.use_ds("测试智能体", qa_prompt, review_payload)
             (self.artifacts / "qa_review.json").write_text(
                 json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
             )
