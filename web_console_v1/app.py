@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
-PORT = 8765
+PORT = 0
 
 TASKS = {
     "TASK-DEMO-001": {
@@ -315,9 +315,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # PORT=0 让 Windows 自动分配一个空闲端口，避免与其他本地程序冲突。
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    url = f"http://{HOST}:{PORT}"
+    actual_port = server.server_address[1]
+    url = f"http://{HOST}:{actual_port}"
     print("PDE 多智能体控制台已启动：", url)
+    print("已自动选择空闲端口，避免与其他本地程序冲突。")
     print("关闭此窗口即可停止控制台。")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     server.serve_forever()
