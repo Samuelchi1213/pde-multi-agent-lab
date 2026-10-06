@@ -81,3 +81,62 @@ def analyze_goal(goal: str, api_key: str | None = None):
 
     result = json.loads(data["choices"][0]["message"]["content"])
     return result, data.get("usage", {})
+
+
+REFINE_PROMPT = """
+你仍然是 PDE 多智能体团队的项目协调智能体。
+
+下面会给你：
+1. 项目负责人最初提出的目标
+2. 你上一轮生成的结构化任务草案
+3. 项目负责人的自然语言补充说明
+
+请根据补充说明更新任务草案。
+
+规则：
+- 已经得到明确回答的问题，不要重复再问。
+- 如果项目负责人一次只回答了部分问题，只保留仍然影响执行的关键问题。
+- 不要为了追求信息完整而无限追问。
+- 如果剩余不确定性可以由产品智能体在执行阶段澄清，就可以把 questions 置空，并在 next_action 中说明先由产品智能体处理。
+- 仍然遵守最少必要智能体原则。
+- 只有方向性冲突、重大取舍、权限/隐私/费用/不可逆风险才标记 needs_owner_decision=true。
+- 只返回 JSON，格式必须与上一轮完全一致。
+"""
+
+
+def refine_goal(goal: str, previous_analysis: dict, user_reply: str, api_key: str | None = None):
+    key = (api_key or os.getenv("DEEPSEEK_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("未设置 DEEPSEEK_API_KEY")
+
+    user_content = {
+        "original_goal": goal,
+        "previous_analysis": previous_analysis,
+        "owner_reply": user_reply,
+    }
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": REFINE_PROMPT},
+            {"role": "user", "content": json.dumps(user_content, ensure_ascii=False, indent=2)},
+        ],
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+    }
+
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    result = json.loads(data["choices"][0]["message"]["content"])
+    return result, data.get("usage", {})
