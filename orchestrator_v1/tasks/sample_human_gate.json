@@ -1,0 +1,17 @@
+{
+  "id": "TASK-HUMAN-001",
+  "title": "学生编码校验 + 外部批准",
+  "goal": "实现 validate_student_code(code)，校验学生编码是否为8位数字字符串；代码验收后还需要项目负责人提供外部批准文件。",
+  "workspace": "orchestrator_v1/workspaces/TASK-HUMAN-001",
+  "acceptance_criteria": [
+    "8位数字字符串返回 True",
+    "其他输入返回 False",
+    "使用 Python 标准库",
+    "开发智能体需要自行创建并运行测试",
+    "最终验收还要求存在 approvals/approval_token.txt",
+    "开发智能体不得修改 workspace 之外的文件"
+  ],
+  "verifier": "orchestrator_v1/verifiers/student_code_human_gate_verifier.py",
+  "max_rework": 2,
+  "max_deepseek_tokens": 8000
+}
