@@ -400,3 +400,20 @@ Web 控制台 v1：
 
 交互目标：
 项目负责人像与团队沟通一样补充需求，而不是填写复杂表单。
+
+
+## 2026-10-06｜动态组队执行 v1
+
+确认任务草案后，Web 控制台新增“启动团队执行”。
+
+当前能力：
+- 按 required_agents 动态组队
+- 产品智能体：DeepSeek，生成产品规格
+- 架构智能体：DeepSeek，生成技术方案
+- 开发智能体：Codex CLI，在隔离工作区实现原型
+- 系统验证器：自动发现并运行 Python unittest
+- 测试智能体：DeepSeek，读取真实工作区和测试证据独立复核
+- 页面显示团队状态、当前智能体、Codex 调用、DeepSeek tokens、团队时间线
+
+安全边界：
+自然语言任务尚未绑定真实目标仓库时，只允许在 orchestrator_v1/dynamic_runs/<draft>/workspace 中做隔离原型，不修改现有产品代码。
