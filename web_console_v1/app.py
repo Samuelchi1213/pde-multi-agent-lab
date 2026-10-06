@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-from coordinator import analyze_goal
+from coordinator import analyze_goal, refine_goal
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -153,6 +153,14 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       <div class="stat">本次 tokens<b id="analysisTokens">0</b></div>
     </div>
     <div id="analysisText" class="analysisText"></div>
+
+    <div id="replyArea" style="margin-top:18px">
+      <label>继续和项目协调智能体说</label>
+      <textarea id="ownerReply" placeholder="直接用自然语言补充即可，例如：晚返定义为超过预计返校时间30分钟；提醒先只给辅导员看；数据来源先用现有返校登记。"></textarea>
+      <button id="replyBtn" onclick="refineGoal()">发送补充说明</button>
+      <button id="confirmBtn" onclick="confirmDraft()" style="background:#166534;margin-left:8px">确认任务草案</button>
+      <span id="draftBadge" class="badge">尚未确认</span>
+    </div>
   </div>
 
   <div class="card">
@@ -189,6 +197,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
 </div>
 
 <script>
+let CURRENT_DRAFT_ID = null;
+
 async function api(path, options){
   const r=await fetch(path, options);
   return await r.json();
@@ -239,40 +249,83 @@ async function analyzeGoal(){
     }
 
     badge.textContent='分析完成';
+    CURRENT_DRAFT_ID=r.draft_id||null;
+    document.getElementById('draftBadge').textContent='待补充/确认';
     const a=r.analysis||{};
 
-    document.getElementById('analysisCard').style.display='block';
-    document.getElementById('taskLevel').textContent=a.task_level||'-';
-    document.getElementById('agentCount').textContent=(a.required_agents||[]).length;
-    document.getElementById('ownerDecision').textContent=a.needs_owner_decision?'是':'否';
-    document.getElementById('analysisTokens').textContent=(r.usage&&r.usage.total_tokens)||0;
-
-    const rows=[
-      ['我的理解',a.summary],
-      ['为什么这样分级',a.reason],
-      ['建议参与的智能体',(a.required_agents||[]).join('、')||'无'],
-      ['本次范围',(a.scope||[]).map(x=>'• '+x).join('<br>')||'暂无'],
-      ['暂不包含',(a.out_of_scope||[]).map(x=>'• '+x).join('<br>')||'暂无'],
-      ['验收标准',(a.acceptance_criteria||[]).map(x=>'• '+x).join('<br>')||'暂无'],
-      ['需要你补充的问题',(a.questions||[]).map(x=>'• '+x).join('<br>')||'暂无'],
-      ['建议执行通道',a.recommended_executor||'待动态路由'],
-      ['下一步',a.next_action||'待定']
-    ];
-
-    if(a.needs_owner_decision){
-      rows.splice(7,0,['为什么需要你拍板',a.owner_decision_reason||'存在需要项目负责人决定的问题']);
-    }
-
-    document.getElementById('analysisText').innerHTML=rows
-      .filter(x=>x[1])
-      .map(x=>'<h4>'+escapeHtml(x[0])+'</h4><div>'+x[1]+'</div>')
-      .join('');
+    renderAnalysis(a, r.usage||{});
   }catch(e){
     badge.textContent='分析失败';
     alert(String(e));
   }finally{
     btn.disabled=false;
   }
+}
+
+function renderAnalysis(a, usage){
+  document.getElementById('analysisCard').style.display='block';
+  document.getElementById('taskLevel').textContent=a.task_level||'-';
+  document.getElementById('agentCount').textContent=(a.required_agents||[]).length;
+  document.getElementById('ownerDecision').textContent=a.needs_owner_decision?'是':'否';
+  document.getElementById('analysisTokens').textContent=(usage&&usage.total_tokens)||0;
+
+  const rows=[
+    ['我的理解',a.summary],
+    ['为什么这样分级',a.reason],
+    ['建议参与的智能体',(a.required_agents||[]).join('、')||'无'],
+    ['本次范围',(a.scope||[]).map(x=>'• '+x).join('<br>')||'暂无'],
+    ['暂不包含',(a.out_of_scope||[]).map(x=>'• '+x).join('<br>')||'暂无'],
+    ['验收标准',(a.acceptance_criteria||[]).map(x=>'• '+x).join('<br>')||'暂无'],
+    ['需要你补充的问题',(a.questions||[]).map(x=>'• '+x).join('<br>')||'暂无'],
+    ['建议执行通道',a.recommended_executor||'待动态路由'],
+    ['下一步',a.next_action||'待定']
+  ];
+
+  if(a.needs_owner_decision){
+    rows.splice(7,0,['为什么需要你拍板',a.owner_decision_reason||'存在需要项目负责人决定的问题']);
+  }
+
+  document.getElementById('analysisText').innerHTML=rows
+    .filter(x=>x[1])
+    .map(x=>'<h4>'+escapeHtml(x[0])+'</h4><div>'+x[1]+'</div>')
+    .join('');
+}
+
+async function refineGoal(){
+  const reply=document.getElementById('ownerReply').value.trim();
+  const key=document.getElementById('key').value;
+  if(!CURRENT_DRAFT_ID){alert('请先让项目协调智能体分析一次。');return;}
+  if(!reply){alert('请输入你的补充说明。');return;}
+
+  const btn=document.getElementById('replyBtn');
+  const badge=document.getElementById('draftBadge');
+  btn.disabled=true; badge.textContent='更新中';
+
+  try{
+    const r=await api('/api/refine',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({draft_id:CURRENT_DRAFT_ID,user_reply:reply,api_key:key})
+    });
+    if(!r.ok){alert(r.error||'更新失败');badge.textContent='更新失败';return;}
+    renderAnalysis(r.analysis||{}, r.usage||{});
+    document.getElementById('ownerReply').value='';
+    badge.textContent=(r.analysis.questions||[]).length?'仍有待确认':'可确认任务草案';
+  }finally{
+    btn.disabled=false;
+  }
+}
+
+async function confirmDraft(){
+  if(!CURRENT_DRAFT_ID){alert('请先生成任务草案。');return;}
+  const r=await api('/api/confirm',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID})
+  });
+  if(!r.ok){alert(r.error||'确认失败');return;}
+  document.getElementById('draftBadge').textContent='已确认';
+  alert('任务草案已确认。下一阶段会把它接入动态组队与自动执行。');
 }
 
 async function startTask(){
@@ -420,6 +473,69 @@ class Handler(BaseHTTPRequestHandler):
                 "draft_id":draft_id,
                 "analysis":analysis,
                 "usage":usage,
+            })
+            return
+
+        if self.path=="/api/refine":
+            draft_id=(data.get("draft_id") or "").strip()
+            user_reply=(data.get("user_reply") or "").strip()
+            api_key=(data.get("api_key") or "").strip()
+
+            if draft_id not in ANALYSES:
+                self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
+                return
+            if not user_reply:
+                self._json({"ok":False,"error":"请输入补充说明"},400)
+                return
+
+            draft=ANALYSES[draft_id]
+            try:
+                analysis,usage=refine_goal(
+                    draft["goal"],
+                    draft["analysis"],
+                    user_reply,
+                    api_key
+                )
+            except Exception as exc:
+                self._json({"ok":False,"error":str(exc)},500)
+                return
+
+            draft["analysis"]=analysis
+            draft.setdefault("conversation",[]).append({
+                "owner_reply":user_reply,
+                "analysis":analysis,
+                "usage":usage
+            })
+
+            self._json({
+                "ok":True,
+                "draft_id":draft_id,
+                "analysis":analysis,
+                "usage":usage
+            })
+            return
+
+        if self.path=="/api/confirm":
+            draft_id=(data.get("draft_id") or "").strip()
+            if draft_id not in ANALYSES:
+                self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
+                return
+
+            draft=ANALYSES[draft_id]
+            draft["confirmed"]=True
+
+            out_dir=ROOT/"orchestrator_v1"/"runtime"/"drafts"
+            out_dir.mkdir(parents=True,exist_ok=True)
+            out_file=out_dir/f"{draft_id}.json"
+            out_file.write_text(
+                json.dumps(draft,ensure_ascii=False,indent=2),
+                encoding="utf-8"
+            )
+
+            self._json({
+                "ok":True,
+                "draft_id":draft_id,
+                "saved_to":str(out_file.relative_to(ROOT))
             })
             return
 
