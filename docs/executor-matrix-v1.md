@@ -127,3 +127,15 @@ Codex CLI 已具备被上层编排程序自动触发和读取结果的能力。
 2. 测试开发任务的结构化交付格式
 3. 让另一个智能体读取 Codex 的交付结果
 4. 验证多执行器串联
+
+
+## 2026-10-06｜真实 Codex → DeepSeek 自动交接成功
+
+用户本地运行 experiments/real_handoff_v1/run.py 的截图证据：
+- Codex CLI 完成项目现状分析并返回结构化 JSON
+- Python 自动把该结果送往 DeepSeek API（deepseek-chat）
+- DeepSeek 返回 pass、说明、问题和下一步建议
+- DeepSeek 用量：prompt_tokens 833，completion_tokens 293，total_tokens 1126
+- 脚本显示“交接链完成”并回到 CMD 提示符
+
+能力边界：本轮仅为对交付摘要的独立语言模型复核，DeepSeek 没有独立读取仓库、运行测试或验证文件证据；不能因此声明真实开发 QA 已完成。后续应加入证据检查、失败返回和真正的自动返工。
