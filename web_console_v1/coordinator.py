@@ -87,23 +87,51 @@ def analyze_goal(goal: str, api_key: str | None = None):
 REFINE_PROMPT = """
 你仍然是 PDE 多智能体团队的项目协调智能体。
 
-下面会给你：
+你会收到：
 1. 项目负责人最初提出的目标
-2. 你上一轮生成的结构化任务草案
-3. 项目负责人的自然语言补充说明
+2. 上一轮完整任务草案
+3. 上一轮仍待确认的问题
+4. 项目负责人的自然语言补充说明
 
-请根据补充说明更新任务草案。
+你的任务不是重新从头分析，而是基于项目负责人的补充说明更新原草案。
 
-规则：
-- 已经得到明确回答的问题，不要重复再问。
-- 如果项目负责人一次只回答了部分问题，只保留仍然影响执行的关键问题。
-- 不要为了追求信息完整而无限追问。
-- 如果剩余不确定性可以由产品智能体在执行阶段澄清，就可以把 questions 置空，并在 next_action 中说明先由产品智能体处理。
+特别重要：
+- 必须逐条检查上一轮 questions。
+- 如果项目负责人的补充说明已经直接或间接回答某个问题，该问题必须标记 answered=true。
+- 已回答的问题绝对不能再次出现在 remaining_questions。
+- 如果只回答了一部分，只保留真正仍会阻碍下一步执行的问题。
+- 不要因为想“更完整”就重新制造同义问题。
+- 可以由产品智能体在后续执行阶段自行澄清的小问题，不必继续问项目负责人。
 - 仍然遵守最少必要智能体原则。
 - 只有方向性冲突、重大取舍、权限/隐私/费用/不可逆风险才标记 needs_owner_decision=true。
-- 只返回 JSON，格式必须与上一轮完全一致。
-"""
 
+只返回 JSON，必须严格使用以下格式：
+
+{
+  "analysis": {
+    "task_level": "A|B|C|D",
+    "summary": "更新后的目标理解",
+    "reason": "为什么这样分级",
+    "required_agents": ["角色"],
+    "scope": ["范围"],
+    "out_of_scope": ["非范围"],
+    "acceptance_criteria": ["验收标准"],
+    "questions": ["这里只放仍未回答的问题"],
+    "needs_owner_decision": false,
+    "owner_decision_reason": "",
+    "recommended_executor": "Codex CLI|DeepSeek API|待动态路由",
+    "next_action": "下一步"
+  },
+  "question_resolution": [
+    {
+      "question": "上一轮问题原文",
+      "answered": true,
+      "answer_summary": "项目负责人已经给出的答案摘要"
+    }
+  ],
+  "remaining_questions": ["仍未回答的问题"]
+}
+"""
 
 def refine_goal(goal: str, previous_analysis: dict, user_reply: str, api_key: str | None = None):
     key = (api_key or os.getenv("DEEPSEEK_API_KEY") or "").strip()
@@ -139,8 +167,29 @@ def refine_goal(goal: str, previous_analysis: dict, user_reply: str, api_key: st
     with urllib.request.urlopen(req, timeout=120) as resp:
         data = json.loads(resp.read().decode("utf-8"))
 
-    result = json.loads(data["choices"][0]["message"]["content"])
-    result = normalize_analysis(result, previous_analysis)
+    raw = json.loads(data["choices"][0]["message"]["content"])
+
+    # 新格式必须包含 analysis + question_resolution + remaining_questions。
+    # 若模型偶尔仍返回旧格式，则兼容处理，但不允许把旧 questions 原样无脑带回。
+    if isinstance(raw, dict) and isinstance(raw.get("analysis"), dict):
+        result = normalize_analysis(raw["analysis"], previous_analysis)
+
+        resolution = raw.get("question_resolution") or []
+        remaining = raw.get("remaining_questions")
+
+        if isinstance(remaining, list):
+            result["questions"] = [str(x) for x in remaining if str(x).strip()]
+        elif isinstance(resolution, list):
+            unresolved = []
+            for item in resolution:
+                if isinstance(item, dict) and not bool(item.get("answered")):
+                    q = str(item.get("question") or "").strip()
+                    if q:
+                        unresolved.append(q)
+            result["questions"] = unresolved
+    else:
+        result = normalize_analysis(raw, previous_analysis)
+
     return result, data.get("usage", {})
 
 
