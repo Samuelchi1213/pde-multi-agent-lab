@@ -15,3 +15,5 @@ orchestrator_v1/*.result.json
 # Local experiment outputs
 experiments/**/codex_result.json
 experiments/**/codex_delivery.json
+
+orchestrator_v1/runtime/drafts/
