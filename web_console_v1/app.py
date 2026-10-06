@@ -240,7 +240,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <h3>系统维护</h3>
     <button onclick="checkUpdate()">检查更新</button>
     <button id="updateBtn" onclick="applyUpdate()" style="background:#2563eb;display:none">立即更新</button>
+    <button onclick="shutdownConsole()" style="background:#6b7280">退出控制台</button>
     <span id="updateBadge" class="badge">尚未检查</span>
+    <span id="versionBadge" class="badge">版本读取中</span>
   </div>
 
   <div class="card">
@@ -292,6 +294,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       <div class="stat">当前智能体<b id="currentAgent">-</b></div>
       <div class="stat">Codex 调用<b id="teamCodex">0</b></div>
       <div class="stat">DeepSeek tokens<b id="teamTokens">0</b></div>
+      <div class="stat">较首次节省<b id="teamSavings">-</b></div>
     </div>
     <div style="margin-top:14px;padding:10px;background:#fff7ed;border-radius:8px">
       当前安全范围：未指定真实目标仓库时，只在隔离工作区做原型，不修改现有产品。
@@ -350,6 +353,7 @@ function escapeHtml(s){
 }
 
 async function init(){
+  await loadVersion();
   await loadExecutors();
   await loadAgentProfiles();
   const data=await api('/api/tasks');
@@ -362,6 +366,23 @@ async function init(){
   }
   sel.onchange=refresh;
   refresh();
+}
+
+async function loadVersion(){
+  try{
+    const d=await api('/api/version');
+    document.getElementById('versionBadge').textContent=d.version?('当前版本 '+d.version):'版本未知';
+  }catch(e){
+    document.getElementById('versionBadge').textContent='版本读取失败';
+  }
+}
+
+async function shutdownConsole(){
+  if(!confirm('确定退出多智能体控制台吗？正在运行的本地任务会停止。'))return;
+  try{
+    await api('/api/shutdown',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  }catch(e){}
+  document.body.innerHTML='<div style="font-family:Microsoft YaHei;padding:40px"><h2>控制台已退出</h2><p>需要继续使用时，再双击“静默启动多智能体控制台.vbs”。</p></div>';
 }
 
 async function loadAgentProfiles(){
@@ -407,7 +428,7 @@ async function applyUpdate(){
   }
   badge.textContent='更新完成，请重启控制台';
   btn.style.display='none';
-  alert('更新完成。请关闭黑色后台窗口并重新双击启动控制台。');
+  alert('更新完成。请点击“退出控制台”，然后重新双击“静默启动多智能体控制台.vbs”。');
 }
 
 async function loadExecutors(){
@@ -620,7 +641,15 @@ async function pollTeam(){
   document.getElementById('teamStatus').textContent=s.status||'准备中';
   document.getElementById('currentAgent').textContent=s.current_agent||'-';
   document.getElementById('teamCodex').textContent=s.codex_calls||0;
-  document.getElementById('teamTokens').textContent=s.deepseek_tokens||0;
+  const used=s.deepseek_tokens||0;
+  document.getElementById('teamTokens').textContent=used;
+  const baseline=37780;
+  if(used>0){
+    const pct=Math.round((baseline-used)/baseline*100);
+    document.getElementById('teamSavings').textContent=(pct>=0?pct+'%':'超出 '+Math.abs(pct)+'%');
+  }else{
+    document.getElementById('teamSavings').textContent='-';
+  }
   document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
   document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
 
@@ -710,6 +739,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
 
+        if parsed.path=="/api/version":
+            try:
+                p=subprocess.run(
+                    ["git","rev-parse","--short","HEAD"],
+                    cwd=ROOT,capture_output=True,text=True,timeout=10,check=False
+                )
+                self._json({"version":p.stdout.strip() or "unknown"})
+            except Exception:
+                self._json({"version":"unknown"})
+            return
+
         if parsed.path=="/api/executors":
             self._json({"executors":executor_status()})
             return
@@ -786,6 +826,11 @@ class Handler(BaseHTTPRequestHandler):
             data=json.loads(body.decode("utf-8"))
         except Exception:
             self._json({"ok":False,"error":"请求格式错误"},400)
+            return
+
+        if self.path=="/api/shutdown":
+            self._json({"ok":True})
+            threading.Thread(target=self.server.shutdown,daemon=True).start()
             return
 
         if self.path=="/api/update/apply":
@@ -924,21 +969,32 @@ class Handler(BaseHTTPRequestHandler):
                 TEAM_RUNS[draft_id]={"running":True,"state":{"status":"准备中","timeline":[]}}
 
             def worker():
+                runner=None
                 try:
                     runner=DynamicTeamRun(ROOT,draft_id,draft,key)
                     state=runner.run()
                     with LOCK:
                         TEAM_RUNS[draft_id]={"running":False,"state":state}
                 except Exception as exc:
-                    with LOCK:
-                        TEAM_RUNS[draft_id]={
-                            "running":False,
-                            "state":{
-                                "status":"执行失败",
-                                "current_agent":"",
-                                "timeline":[{"agent":"系统","action":"执行失败","detail":str(exc)}]
-                            }
+                    if runner is not None and "token 预算" in str(exc):
+                        runner.state["status"]="预算停止"
+                        runner.state["current_agent"]=""
+                        runner.event("成本控制器","已停止后续调用",{
+                            "reason":str(exc),
+                            "used":runner.state.get("deepseek_tokens",0),
+                            "budget":runner.state.get("deepseek_token_budget",0),
+                        })
+                        runner.state["current_agent"]=""
+                        runner.save()
+                        state=runner.state
+                    else:
+                        state={
+                            "status":"执行失败",
+                            "current_agent":"",
+                            "timeline":[{"agent":"系统","action":"执行失败","detail":str(exc)}]
                         }
+                    with LOCK:
+                        TEAM_RUNS[draft_id]={"running":False,"state":state}
 
             threading.Thread(target=worker,daemon=True).start()
             self._json({"ok":True,"draft_id":draft_id})
