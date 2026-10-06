@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {"type": "string", "enum": ["success", "failed"]},
+    "summary": {"type": "string"},
+    "files_changed": {"type": "array", "items": {"type": "string"}},
+    "commands_run": {"type": "array", "items": {"type": "string"}},
+    "tests_passed": {"type": "boolean"},
+    "test_evidence": {"type": "string"},
+    "risks": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["status","summary","files_changed","commands_run","tests_passed","test_evidence","risks"]
+}
