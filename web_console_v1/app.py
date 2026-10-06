@@ -510,17 +510,23 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path=="/api/team/status":
             q=parse_qs(parsed.query)
             draft_id=q.get("draft_id",[""])[0]
+
             with LOCK:
                 meta=TEAM_RUNS.get(draft_id,{})
                 running=bool(meta.get("running"))
-                state=dict(meta.get("state") or {})
-            if not state:
-                state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
-                if state_path.exists():
-                    try:
-                        state=json.loads(state_path.read_text(encoding="utf-8"))
-                    except Exception:
-                        state={}
+                memory_state=dict(meta.get("state") or {})
+
+            # DynamicTeamRun 会持续把最新状态写到 state.json。
+            # 运行期间优先读取磁盘中的实时状态，避免页面一直停留在“准备中”。
+            state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+            disk_state={}
+            if state_path.exists():
+                try:
+                    disk_state=json.loads(state_path.read_text(encoding="utf-8"))
+                except Exception:
+                    disk_state={}
+
+            state=disk_state or memory_state
             self._json({"ok":True,"running":running,"state":state})
             return
 
