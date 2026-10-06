@@ -10,12 +10,12 @@ from datetime import datetime
 ROLE_PROMPTS = {
     "产品智能体": """你是产品智能体。基于已确认的任务草案，输出可执行的产品规格。
 重点：业务规则、用户体验、范围、非范围、边界条件、验收标准。
-不要讨论代码实现细节。只返回 JSON。""",
+不要讨论代码实现细节。控制在关键规则内，避免长篇背景复述。只返回 JSON。""",
     "架构智能体": """你是架构智能体。基于已确认草案和产品规格，输出技术方案。
 重点：模块边界、数据结构、接口、权限、隐私、失败处理、实现顺序。
-如果没有真实目标项目代码，只设计隔离原型方案，不假装已经修改真实系统。只返回 JSON。""",
+如果没有真实目标项目代码，只设计隔离原型方案，不假装已经修改真实系统。只保留实现所需的信息，避免重复产品背景。只返回 JSON。""",
     "测试智能体": """你是独立测试智能体。你必须依据已确认草案、产品/架构产物、真实工作区文件和测试证据复核。
-不要相信开发智能体自述。判断 pass / rework / need_human。只返回 JSON。""",
+不要相信开发智能体自述。判断 pass / rework / need_human。优先依据验收标准和测试证据，不重复转述全部上下文。只返回 JSON。""",
 }
 
 
@@ -47,13 +47,22 @@ def codex_path():
     return shutil.which("codex.cmd") or shutil.which("codex")
 
 
-def read_workspace(workspace):
+def read_workspace(workspace, total_limit=16000, per_file_limit=5000):
     files = {}
+    used = 0
     for path in workspace.rglob("*"):
         if path.is_file() and path.suffix.lower() in {".py", ".md", ".txt", ".json", ".html", ".js", ".css"}:
-            files[path.relative_to(workspace).as_posix()] = path.read_text(
-                encoding="utf-8", errors="replace"
-            )
+            rel = path.relative_to(workspace).as_posix()
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if len(text) > per_file_limit:
+                text = text[:per_file_limit] + "\n...[truncated]"
+            if used + len(text) > total_limit:
+                remain = max(0, total_limit - used)
+                if remain > 0:
+                    files[rel] = text[:remain] + "\n...[context limit reached]"
+                break
+            files[rel] = text
+            used += len(text)
     return files
 
 
@@ -122,6 +131,10 @@ def run_codex(workspace, prompt, schema_path, result_path):
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
+class BudgetExceeded(RuntimeError):
+    pass
+
+
 class DynamicTeamRun:
     def __init__(self, root: Path, draft_id: str, draft: dict, api_key: str):
         self.root = root
@@ -139,6 +152,8 @@ class DynamicTeamRun:
             "team": draft["analysis"].get("required_agents", []),
             "current_agent": "",
             "deepseek_tokens": 0,
+            "deepseek_token_budget": 16000,
+            "role_usage": {},
             "codex_calls": 0,
             "deepseek_calls": 0,
             "timeline": [],
@@ -166,11 +181,25 @@ class DynamicTeamRun:
         })
         self.save()
 
-    def use_ds(self, system, payload):
+    def use_ds(self, role, system, payload):
+        if self.state["deepseek_tokens"] >= self.state["deepseek_token_budget"]:
+            raise BudgetExceeded("DeepSeek token 预算已达到上限，停止继续调用")
+
         result, usage = deepseek_json(self.api_key, system, payload)
+        used = int(usage.get("total_tokens", 0) or 0)
+
         self.state["deepseek_calls"] += 1
-        self.state["deepseek_tokens"] += int(usage.get("total_tokens", 0) or 0)
+        self.state["deepseek_tokens"] += used
+        self.state["role_usage"][role] = self.state["role_usage"].get(role, 0) + used
         self.save()
+
+        if self.state["deepseek_tokens"] > self.state["deepseek_token_budget"]:
+            self.event("成本控制器", "token预算超限", {
+                "used": self.state["deepseek_tokens"],
+                "budget": self.state["deepseek_token_budget"],
+            })
+            raise BudgetExceeded("DeepSeek token 预算超限，已停止后续模型调用")
+
         return result, usage
 
     def run(self):
@@ -190,7 +219,10 @@ class DynamicTeamRun:
 
         if "产品智能体" in team:
             self.event("产品智能体", "开始整理产品规格")
-            product_spec, _ = self.use_ds(ROLE_PROMPTS["产品智能体"], context)
+            product_spec, _ = self.use_ds("产品智能体", ROLE_PROMPTS["产品智能体"], {
+                "confirmed_analysis": analysis,
+                "owner_constraints": self.draft.get("conversation", [])[-2:],
+            })
             (self.artifacts / "product_spec.json").write_text(
                 json.dumps(product_spec, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -199,8 +231,12 @@ class DynamicTeamRun:
         if "架构智能体" in team:
             self.event("架构智能体", "开始设计技术方案")
             architecture, _ = self.use_ds(
+                "架构智能体",
                 ROLE_PROMPTS["架构智能体"],
-                {**context, "product_spec": product_spec},
+                {
+                    "confirmed_analysis": analysis,
+                    "product_spec": product_spec,
+                },
             )
             (self.artifacts / "architecture.json").write_text(
                 json.dumps(architecture, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -241,15 +277,14 @@ class DynamicTeamRun:
         if "测试智能体" in team:
             self.event("测试智能体", "开始独立复核")
             review_payload = {
-                **context,
-                "product_spec": product_spec,
-                "architecture": architecture,
+                "acceptance_criteria": analysis.get("acceptance_criteria", []),
+                "scope": analysis.get("scope", []),
                 "developer_delivery": delivery,
                 "workspace_files": read_workspace(self.workspace),
                 "test_evidence": test_evidence,
                 "safety_boundary": self.state["safety_note"],
             }
-            review, _ = self.use_ds(ROLE_PROMPTS["测试智能体"], review_payload)
+            review, _ = self.use_ds("测试智能体", ROLE_PROMPTS["测试智能体"], review_payload)
             (self.artifacts / "qa_review.json").write_text(
                 json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
             )
