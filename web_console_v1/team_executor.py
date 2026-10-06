@@ -138,8 +138,14 @@ def run_codex(workspace, prompt, schema_path, result_path):
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
-class BudgetExceeded(RuntimeError):
-    pass
+class BudgetApprovalRequired(RuntimeError):
+    def __init__(self, role, used, budget, requested_extra, reason):
+        super().__init__(reason)
+        self.role = role
+        self.used = used
+        self.budget = budget
+        self.requested_extra = requested_extra
+        self.reason = reason
 
 
 class DynamicTeamRun:
@@ -160,14 +166,15 @@ class DynamicTeamRun:
             "current_agent": "",
             "deepseek_tokens": 0,
             "deepseek_normal_budget": 16000,
-            "deepseek_token_budget": 16000,
-            "deepseek_absolute_budget": 23000,
+            "deepseek_token_budget": int(draft.get("approved_token_budget", 16000)),
+            "deepseek_absolute_budget": 30000,
             "rework_budget_step": 3500,
             "role_usage": {},
             "codex_calls": 0,
             "deepseek_calls": 0,
             "rework_count": 0,
             "max_reworks": 2,
+            "budget_approval": None,
             "timeline": [],
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "workspace": str(self.workspace.relative_to(root)),
@@ -195,7 +202,17 @@ class DynamicTeamRun:
 
     def use_ds(self, role, system, payload):
         if self.state["deepseek_tokens"] >= self.state["deepseek_token_budget"]:
-            raise BudgetExceeded("DeepSeek token 预算已达到上限，停止继续调用")
+            requested_extra = min(
+                4000,
+                max(1500, self.state["deepseek_absolute_budget"] - self.state["deepseek_token_budget"])
+            )
+            raise BudgetApprovalRequired(
+                role,
+                self.state["deepseek_tokens"],
+                self.state["deepseek_token_budget"],
+                requested_extra,
+                f"{role} 仍需继续完成当前工作，现有 token 预算已用尽。"
+            )
 
         result, usage = deepseek_json(self.api_key, system, payload)
         used = int(usage.get("total_tokens", 0) or 0)
@@ -206,11 +223,18 @@ class DynamicTeamRun:
         self.save()
 
         if self.state["deepseek_tokens"] > self.state["deepseek_token_budget"]:
-            self.event("成本控制器", "token预算超限", {
-                "used": self.state["deepseek_tokens"],
-                "budget": self.state["deepseek_token_budget"],
-            })
-            raise BudgetExceeded("DeepSeek token 预算超限，已停止后续模型调用")
+            over = self.state["deepseek_tokens"] - self.state["deepseek_token_budget"]
+            requested_extra = min(
+                4000,
+                max(1500, over + 1000)
+            )
+            raise BudgetApprovalRequired(
+                role,
+                self.state["deepseek_tokens"],
+                self.state["deepseek_token_budget"],
+                requested_extra,
+                f"{role} 已完成本次调用，但继续后续工作需要追加少量 token 预算。"
+            )
 
         return result, usage
 
