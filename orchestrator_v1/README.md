@@ -87,3 +87,25 @@ python orchestrator_v1\main.py
 - Web 群聊界面
 
 这些会在统一编排器稳定后逐步加入。
+
+
+## 人工决策关口验证
+
+运行：
+
+```cmd
+python orchestrator_v1\main.py --task orchestrator_v1/tasks/sample_human_gate.json
+```
+
+这个任务会让 Codex 完成一个正常的学生编码校验功能，但独立验证器还要求存在：
+
+`approvals/approval_token.txt`
+
+该文件位于开发智能体工作区之外，因此理论上 DeepSeek 应判定为 `need_human`，统一编排器应停止自动推进，并生成：
+
+`orchestrator_v1/runtime/TASK-HUMAN-001.human.json`
+
+成功标准：
+- 终端显示“等待人工决策”
+- state.json 的状态为“等待人工决策”
+- human.json 存在，并包含 reason、issues、requested_action、options 等字段
