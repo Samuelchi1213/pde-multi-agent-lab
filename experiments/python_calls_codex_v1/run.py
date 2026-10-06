@@ -1,5 +1,6 @@
 import json
 import subprocess
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,8 +28,17 @@ def run_codex():
     if RESULT_FILE.exists():
         RESULT_FILE.unlink()
 
+    codex_path = shutil.which("codex.cmd") or shutil.which("codex")
+    if not codex_path:
+        print("未找到 Codex CLI。请先确认 codex --version 能在 CMD 中正常运行。")
+        return 1
+
+    # Windows 下 npm 全局命令通常通过 .cmd 启动。
+    # 为了让 subprocess 稳定执行，显式通过 cmd /c 调用。
     command = [
-        "codex",
+        "cmd",
+        "/c",
+        codex_path,
         "exec",
         "--model", "gpt-5.6-sol",
         "--sandbox", "read-only",
