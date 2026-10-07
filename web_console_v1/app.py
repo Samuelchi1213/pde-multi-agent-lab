@@ -251,6 +251,17 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   </div>
 
   <div class="card">
+    <h3>系统回归验证</h3>
+    <div style="padding:10px;background:#eff6ff;border-radius:8px;line-height:1.6">
+      这里仅验证多智能体流程，不连接真实辅导员工作台。
+    </div>
+    <button id="reworkTestBtn" onclick="startReworkValidation()" style="background:#7c3aed">验证自动返工闭环</button>
+    <button id="budgetTestBtn" onclick="startBudgetValidation()" style="background:#0f766e;margin-left:8px">验证预算申请交互</button>
+    <span id="validationBadge" class="badge">尚未验证</span>
+    <pre id="validationResult" style="display:none;margin-top:12px"></pre>
+  </div>
+
+  <div class="card">
     <h3>告诉团队你现在想做什么</h3>
     <textarea id="goal" placeholder="例如：给辅导员工作台增加晚返学生提醒功能，但不要给学生造成太强的被监控感。"></textarea>
 
@@ -495,6 +506,62 @@ async function saveDeepSeekKey(){
   }finally{
     clearTimeout(timer);
   }
+}
+
+async function startReworkValidation(){
+  const btn=document.getElementById('reworkTestBtn');
+  const badge=document.getElementById('validationBadge');
+  btn.disabled=true;
+  badge.textContent='自动返工验证中...';
+  const r=await api('/api/validation/rework/start',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!r.ok){
+    btn.disabled=false; badge.textContent='验证启动失败'; alert(r.error||'启动失败'); return;
+  }
+  CURRENT_DRAFT_ID=r.draft_id;
+  document.getElementById('teamCard').style.display='block';
+  document.getElementById('executeBadge').textContent='验证运行中';
+  pollValidation('rework');
+}
+
+async function startBudgetValidation(){
+  const badge=document.getElementById('validationBadge');
+  badge.textContent='预算申请验证已启动';
+  const r=await api('/api/validation/budget/start',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!r.ok){badge.textContent='验证启动失败';alert(r.error||'启动失败');return;}
+  CURRENT_DRAFT_ID=r.draft_id;
+  document.getElementById('teamCard').style.display='block';
+  await pollTeam();
+  document.getElementById('validationResult').style.display='block';
+  document.getElementById('validationResult').textContent='请在“团队执行”区域点击“同意追加并继续”或“先暂停任务”，验证审批交互。';
+}
+
+async function pollValidation(kind){
+  if(!CURRENT_DRAFT_ID)return;
+  const d=await api('/api/team/status?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID));
+  if(!d.ok)return;
+  const s=d.state||{};
+  document.getElementById('teamStatus').textContent=s.status||'准备中';
+  document.getElementById('currentAgent').textContent=s.current_agent||'-';
+  document.getElementById('teamCodex').textContent=s.codex_calls||0;
+  document.getElementById('teamRework').textContent=(s.rework_count||0)+' / '+(s.max_reworks||2);
+  document.getElementById('teamTokens').textContent=s.deepseek_tokens||0;
+  document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
+  document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
+  if(d.running){
+    setTimeout(()=>pollValidation(kind),2000);
+    return;
+  }
+  document.getElementById('reworkTestBtn').disabled=false;
+  const ok=(s.status==='已完成' && (s.rework_count||0)>=1 && (s.codex_calls||0)>=2);
+  document.getElementById('validationBadge').textContent=ok?'自动返工验证通过':'自动返工验证需检查';
+  document.getElementById('validationResult').style.display='block';
+  document.getElementById('validationResult').textContent=ok
+    ? '通过：首次开发后触发返工，Codex 再次修改，重新测试并完成复核。'
+    : '未满足完整通过条件，请把团队执行区域截图发给我。';
 }
 
 async function analyzeGoal(){
@@ -986,6 +1053,112 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if self.path=="/api/validation/rework/start":
+            if not get_deepseek_key():
+                self._json({"ok":False,"error":"DeepSeek 尚未连接"},400)
+                return
+            draft_id=f"VALIDATE-REWORK-{int(time.time())}"
+            draft={
+                "goal":"验证动态团队自动返工闭环，不连接真实项目。",
+                "confirmed":True,
+                "validation_force_rework_once":True,
+                "analysis":{
+                    "task_level":"B",
+                    "summary":"创建一个极小 Python 原型，用于验证开发、测试、自动返工和复核链路。",
+                    "reason":"系统回归验证",
+                    "required_agents":["开发智能体","测试智能体"],
+                    "scope":["在隔离工作区创建最小 Python 示例和 unittest"],
+                    "out_of_scope":["真实辅导员工作台","外部业务数据"],
+                    "acceptance_criteria":[
+                        "存在可运行的 Python 示例",
+                        "存在 unittest 且系统验证器可执行",
+                        "首次测试复核固定触发一次返工",
+                        "返工后再次验证并得到最终结论"
+                    ],
+                    "questions":[],
+                    "needs_owner_decision":False,
+                    "recommended_executor":"Codex CLI + DeepSeek API",
+                    "next_action":"执行回归验证"
+                }
+            }
+            ANALYSES[draft_id]=draft
+            with LOCK:
+                TEAM_RUNS[draft_id]={"running":True,"state":{"status":"准备中","timeline":[]}}
+
+            def validation_worker():
+                runner=None
+                try:
+                    runner=DynamicTeamRun(ROOT,draft_id,draft,get_deepseek_key())
+                    state=runner.run()
+                except Exception as exc:
+                    if runner is not None:
+                        state=runner.state
+                        state["status"]="验证失败"
+                        state["current_agent"]=""
+                        runner.event("系统验证","自动返工验证异常",str(exc))
+                        runner.state["current_agent"]=""
+                        runner.save()
+                    else:
+                        state={"status":"验证失败","timeline":[{"agent":"系统验证","action":"启动失败","detail":str(exc)}]}
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":state}
+
+            threading.Thread(target=validation_worker,daemon=True).start()
+            self._json({"ok":True,"draft_id":draft_id})
+            return
+
+        if self.path=="/api/validation/budget/start":
+            draft_id=f"VALIDATE-BUDGET-{int(time.time())}"
+            draft={
+                "goal":"仅验证预算审批交互，不调用模型。",
+                "confirmed":True,
+                "validation_budget_only":True,
+                "analysis":{
+                    "task_level":"A",
+                    "summary":"预算审批交互验证",
+                    "required_agents":[],
+                    "scope":[],
+                    "acceptance_criteria":[],
+                    "questions":[],
+                    "needs_owner_decision":True
+                }
+            }
+            ANALYSES[draft_id]=draft
+            run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
+            run_dir.mkdir(parents=True,exist_ok=True)
+            state={
+                "draft_id":draft_id,
+                "status":"等待预算确认",
+                "team":[],
+                "current_agent":"",
+                "deepseek_tokens":15800,
+                "deepseek_token_budget":16000,
+                "role_usage":{"测试智能体":4200},
+                "codex_calls":1,
+                "deepseek_calls":3,
+                "rework_count":1,
+                "max_reworks":2,
+                "budget_approval":{
+                    "role":"测试智能体",
+                    "used":15800,
+                    "budget":16000,
+                    "requested_extra":2500,
+                    "reason":"测试智能体正在进行返工后的复核，建议追加 2500 tokens 完成本轮检查。"
+                },
+                "timeline":[{
+                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "agent":"成本控制器",
+                    "action":"验证模式：申请追加预算",
+                    "detail":"本验证不会产生新的模型调用。"
+                }],
+                "validation_budget_only":True
+            }
+            (run_dir/"state.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+            with LOCK:
+                TEAM_RUNS[draft_id]={"running":False,"state":state}
+            self._json({"ok":True,"draft_id":draft_id})
+            return
+
         if self.path=="/api/team/budget":
             draft_id=(data.get("draft_id") or "").strip()
             decision=(data.get("decision") or "").strip()
@@ -999,7 +1172,7 @@ class Handler(BaseHTTPRequestHandler):
             state=json.loads(state_path.read_text(encoding="utf-8"))
             req=state.get("budget_approval") or {}
             if decision=="decline":
-                state["status"]="已暂停"
+                state["status"]="验证通过：已选择暂停" if draft_id.startswith("VALIDATE-BUDGET-") else "已暂停"
                 state["budget_approval"]=None
                 state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
                 with LOCK:
@@ -1008,6 +1181,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if decision!="approve":
                 self._json({"ok":False,"error":"未知预算决策"},400)
+                return
+
+            if draft_id.startswith("VALIDATE-BUDGET-"):
+                extra=int(req.get("requested_extra") or 2500)
+                state["deepseek_token_budget"]=int(req.get("budget") or 16000)+extra
+                state["budget_approval"]=None
+                state["status"]="验证通过：预算已批准"
+                state.setdefault("timeline",[]).append({
+                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "agent":"项目负责人",
+                    "action":"验证模式：批准追加预算",
+                    "detail":{"added":extra,"new_budget":state["deepseek_token_budget"]}
+                })
+                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":state}
+                self._json({"ok":True,"new_budget":state["deepseek_token_budget"],"validation":True})
                 return
 
             current_budget=int(req.get("budget") or state.get("deepseek_token_budget") or 16000)
