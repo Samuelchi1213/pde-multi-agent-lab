@@ -449,6 +449,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       <button onclick="approveBudget()" style="background:#166534">同意追加并继续</button>
       <button onclick="declineBudget()" style="background:#6b7280">先暂停任务</button>
     </div>
+    <div id="humanAcceptance" class="card human" style="display:none;margin-top:14px">
+      <h4>需要你实际验收</h4>
+      <div id="humanAcceptanceText"></div>
+      <textarea id="humanAcceptanceNote" placeholder="可选：写下你的验收反馈，例如：新增学生正常，但筛选按钮有问题。"></textarea>
+      <button onclick="approveHumanAcceptance()" style="background:#166534">验收通过</button>
+      <button onclick="rejectHumanAcceptance()" style="background:#b91c1c">退回返工</button>
+    </div>
     <h4>分角色成本</h4>
     <pre id="roleUsage">暂无。</pre>
     <h4>团队时间线</h4>
@@ -1001,6 +1008,36 @@ async function startTeamExecution(){
   pollTeam();
 }
 
+async function approveHumanAcceptance(){
+  if(!CURRENT_DRAFT_ID)return;
+  const note=document.getElementById('humanAcceptanceNote').value.trim();
+  const r=await api('/api/team/human-decision',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID,decision:'approve',note:note})
+  });
+  if(!r.ok){alert(r.error||'提交验收结果失败');return;}
+  document.getElementById('humanAcceptance').style.display='none';
+  pollTeam();
+}
+
+async function rejectHumanAcceptance(){
+  if(!CURRENT_DRAFT_ID)return;
+  const note=document.getElementById('humanAcceptanceNote').value.trim();
+  if(!note){
+    alert('退回返工时，请写明你实际遇到的问题。');
+    return;
+  }
+  const r=await api('/api/team/human-decision',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID,decision:'rework',note:note})
+  });
+  if(!r.ok){alert(r.error||'提交返工意见失败');return;}
+  document.getElementById('humanAcceptance').style.display='none';
+  pollTeam();
+}
+
 async function approveBudget(){
   if(!CURRENT_DRAFT_ID)return;
   const r=await api('/api/team/budget',{
@@ -1044,6 +1081,25 @@ async function pollTeam(){
   }else{
     document.getElementById('teamSavings').textContent='-';
   }
+  const human=document.getElementById('humanAcceptance');
+  if(s.status==='等待人工决策'){
+    human.style.display='block';
+    let reason='请在项目验收中心实际打开并操作功能，然后在这里提交验收结果。';
+    const tl=s.timeline||[];
+    for(let i=tl.length-1;i>=0;i--){
+      const e=tl[i]||{};
+      if(e.agent==='项目协调智能体' && e.action==='升级给项目负责人'){
+        if(e.detail&&e.detail.reason)reason=e.detail.reason;
+        break;
+      }
+    }
+    document.getElementById('humanAcceptanceText').innerHTML=
+      '<p>'+escapeHtml(reason)+'</p>'
+      +'<p><b>建议先去上方“项目验收中心”点击：刷新验收信息 → 启动工作台 → 打开工作台，并完成真实操作。</b></p>';
+  }else{
+    human.style.display='none';
+  }
+
   const ask=document.getElementById('budgetAsk');
   if(s.status==='等待预算确认' && s.budget_approval){
     ask.style.display='block';
@@ -1806,6 +1862,58 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 TEAM_RUNS[draft_id]={"running":False,"state":state}
             self._json({"ok":True,"draft_id":draft_id})
+            return
+
+        if self.path=="/api/team/human-decision":
+            draft_id=(data.get("draft_id") or "").strip()
+            decision=(data.get("decision") or "").strip()
+            note=(data.get("note") or "").strip()
+            if draft_id not in ANALYSES:
+                self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
+                return
+            state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+            if not state_path.exists():
+                self._json({"ok":False,"error":"未找到团队运行状态"},404)
+                return
+            state=json.loads(state_path.read_text(encoding="utf-8"))
+            if state.get("status")!="等待人工决策":
+                self._json({"ok":False,"error":"当前任务不在等待人工验收状态"},409)
+                return
+
+            if decision=="approve":
+                state["status"]="已完成"
+                state["current_agent"]=""
+                state.setdefault("timeline",[]).append({
+                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "agent":"项目负责人",
+                    "action":"人工验收通过",
+                    "detail":{"note":note}
+                })
+                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":state}
+                self._json({"ok":True,"status":"已完成"})
+                return
+
+            if decision=="rework":
+                if not note:
+                    self._json({"ok":False,"error":"退回返工时必须填写实际问题"},400)
+                    return
+                state["status"]="需要人工返工"
+                state["current_agent"]=""
+                state.setdefault("timeline",[]).append({
+                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "agent":"项目负责人",
+                    "action":"人工验收退回返工",
+                    "detail":{"note":note}
+                })
+                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":state}
+                self._json({"ok":True,"status":"需要人工返工"})
+                return
+
+            self._json({"ok":False,"error":"未知人工决策"},400)
             return
 
         if self.path=="/api/team/budget":
