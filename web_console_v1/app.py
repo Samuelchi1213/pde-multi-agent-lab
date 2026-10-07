@@ -946,6 +946,17 @@ async function pollTeam(){
   }
   document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
   document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
+  const safety=document.getElementById('teamSafety');
+  if(safety){
+    if(s.real_project){
+      safety.textContent='当前安全范围：已绑定真实项目 '+s.real_project
+        +'；权限 '+(s.project_mode||'未知')
+        +'；仅允许写回 '+((s.allowed_paths||[]).join(', ')||'无')
+        +'；Git commit 禁止。';
+    }else{
+      safety.textContent='当前安全范围：'+(s.safety_note||'隔离工作区');
+    }
+  }
 
   const running=d.running;
   document.getElementById('executeBtn').disabled=!!running;
