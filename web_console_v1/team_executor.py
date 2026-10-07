@@ -343,6 +343,41 @@ class DynamicTeamRun:
         )
         return review
 
+    def run_validation_rework_locally(self, round_no):
+        """仅用于回归验证：用本地确定性执行器验证返工路由，不调用外部模型。"""
+        self.state["rework_count"] = round_no
+        self.state["status"] = "自动返工中"
+        self.event("项目协调智能体", f"验证模式：启动第{round_no}轮自动返工", {
+            "executor": "本地验证执行器",
+            "note": "不调用 Codex，不消耗模型额度。"
+        })
+        self.event("开发智能体", f"验证模式：执行第{round_no}轮返工")
+        (self.workspace / "rework_proof.py").write_text(
+            "def proof():\n    return 'AUTO_REWORK_OK'\n",
+            encoding="utf-8"
+        )
+        (self.workspace / "test_rework_proof.py").write_text(
+            "import unittest\n"
+            "from rework_proof import proof\n\n"
+            "class TestReworkProof(unittest.TestCase):\n"
+            "    def test_proof(self):\n"
+            "        self.assertEqual(proof(), 'AUTO_REWORK_OK')\n\n"
+            "if __name__ == '__main__':\n"
+            "    unittest.main()\n",
+            encoding="utf-8"
+        )
+        delivery = {
+            "status": "success",
+            "summary": "验证模式：本地执行器完成返工。",
+            "files_changed": ["rework_proof.py", "test_rework_proof.py"],
+            "commands_run": [],
+            "tests_passed": True,
+            "test_evidence": "等待系统验证器独立运行 unittest。",
+            "risks": []
+        }
+        self.event("开发智能体", f"验证模式：第{round_no}轮返工交付完成", delivery)
+        return delivery
+
     def run_rework(self, analysis, review, round_no):
         self.state["rework_count"] = round_no
         self.state["status"] = "自动返工中"
@@ -500,7 +535,10 @@ class DynamicTeamRun:
             ):
                 round_no = self.state["rework_count"] + 1
                 previous_review = review
-                delivery = self.run_rework(analysis, previous_review, round_no)
+                if self.draft.get("validation_local_rework_executor"):
+                    delivery = self.run_validation_rework_locally(round_no)
+                else:
+                    delivery = self.run_rework(analysis, previous_review, round_no)
 
                 test_evidence = run_python_tests(self.workspace)
                 self.event(
