@@ -325,8 +325,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
 
     <button onclick="validateProject()">检测项目</button>
     <button onclick="saveProjectConnection()" style="background:#166534;margin-left:8px">确认并保存授权</button>
+    <button onclick="testProjectScope()" style="background:#7c3aed;margin-left:8px">验证写权限隔离</button>
     <button onclick="disconnectProject()" style="background:#6b7280;margin-left:8px">断开真实项目</button>
     <span id="projectBadge" class="badge">隔离模式</span>
+    <pre id="projectScopeResult" style="display:none;margin-top:12px"></pre>
   </div>
 
   <div class="card">
@@ -571,6 +573,24 @@ async function disconnectProject(){
   });
   if(!r.ok){alert(r.error||'断开失败');return;}
   await loadProjectConnection();
+}
+
+async function testProjectScope(){
+  const box=document.getElementById('projectScopeResult');
+  box.style.display='block';
+  box.textContent='正在验证指定目录写权限隔离...';
+  const r=await api('/api/project/scope-test',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:'{}'
+  });
+  if(!r.ok){
+    box.textContent='验证失败：'+(r.error||'未知错误');
+    return;
+  }
+  box.textContent=r.passed
+    ? '通过：允许目录中的测试文件可以同步，根目录越权文件没有写回真实项目；测试文件已清理。'
+    : '未通过：'+(r.detail||'权限隔离结果异常，请停止真实任务。');
 }
 
 async function checkUpdate(){
@@ -1154,6 +1174,65 @@ class Handler(BaseHTTPRequestHandler):
             }
             save_project_connection(config)
             self._json({"ok":True,"config":config})
+            return
+
+        if self.path=="/api/project/scope-test":
+            config=load_project_connection()
+            if not config.get("connected") or not config.get("validated"):
+                self._json({"ok":False,"error":"当前没有已授权真实项目"},400)
+                return
+            if config.get("mode")!="scoped_write":
+                self._json({"ok":False,"error":"请先将权限模式设置为“允许修改指定目录”"},400)
+                return
+            allowed=[str(x).strip() for x in config.get("allowed_paths",[]) if str(x).strip()]
+            if "src" not in allowed:
+                self._json({"ok":False,"error":"本验证需要 src 在允许修改目录中"},400)
+                return
+
+            real_project=Path(config["path"])
+            if not real_project.exists():
+                self._json({"ok":False,"error":"真实项目目录不存在"},400)
+                return
+
+            validation_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/f"SCOPE-TEST-{int(time.time())}"
+            staging=validation_dir/"workspace"
+            try:
+                from team_executor import copy_project_to_staging, sync_allowed_paths
+                copy_project_to_staging(real_project,staging)
+
+                allowed_file=staging/"src"/"__pde_scope_test__.txt"
+                escape_file=staging/"__pde_scope_escape_test__.txt"
+                allowed_file.parent.mkdir(parents=True,exist_ok=True)
+                allowed_file.write_text("PDE_SCOPE_ALLOWED",encoding="utf-8")
+                escape_file.write_text("PDE_SCOPE_ESCAPE",encoding="utf-8")
+
+                sync_allowed_paths(staging,real_project,allowed)
+
+                real_allowed=real_project/"src"/"__pde_scope_test__.txt"
+                real_escape=real_project/"__pde_scope_escape_test__.txt"
+                allowed_ok=real_allowed.exists() and real_allowed.read_text(
+                    encoding="utf-8",errors="replace"
+                )=="PDE_SCOPE_ALLOWED"
+                escape_blocked=not real_escape.exists()
+                passed=bool(allowed_ok and escape_blocked)
+
+                if real_allowed.exists():
+                    real_allowed.unlink()
+                if real_escape.exists():
+                    real_escape.unlink()
+
+                self._json({
+                    "ok":True,
+                    "passed":passed,
+                    "allowed_write":allowed_ok,
+                    "escape_blocked":escape_blocked,
+                    "detail":"授权目录写回成功，越权根目录写入被隔离。" if passed else "检测到权限隔离异常。"
+                })
+            except Exception as exc:
+                self._json({"ok":False,"error":str(exc)},500)
+            finally:
+                if validation_dir.exists():
+                    shutil.rmtree(validation_dir,ignore_errors=True)
             return
 
         if self.path=="/api/shutdown":
