@@ -253,7 +253,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   <div class="card">
     <h3>系统回归验证</h3>
     <div style="padding:10px;background:#eff6ff;border-radius:8px;line-height:1.6">
-      这里仅验证多智能体流程，不连接真实辅导员工作台。
+      这里仅验证多智能体编排流程，不连接真实辅导员工作台。回归验证使用本地验证执行器，不调用 Codex/DeepSeek；真实任务仍使用真实模型。
     </div>
     <button id="reworkTestBtn" onclick="startReworkValidation()" style="background:#7c3aed">验证自动返工闭环</button>
     <button id="budgetTestBtn" onclick="startBudgetValidation()" style="background:#0f766e;margin-left:8px">验证预算申请交互</button>
@@ -512,7 +512,7 @@ async function startReworkValidation(){
   const btn=document.getElementById('reworkTestBtn');
   const badge=document.getElementById('validationBadge');
   btn.disabled=true;
-  badge.textContent='自动返工验证中（通常 1–3 分钟）...';
+  badge.textContent='自动返工验证中（通常几秒）...';
   const r=await api('/api/validation/rework/start',{
     method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
   });
@@ -556,11 +556,11 @@ async function pollValidation(kind){
     return;
   }
   document.getElementById('reworkTestBtn').disabled=false;
-  const ok=(s.status==='已完成' && (s.rework_count||0)>=1 && (s.codex_calls||0)>=1);
+  const ok=(s.status==='已完成' && (s.rework_count||0)>=1);
   document.getElementById('validationBadge').textContent=ok?'自动返工验证通过':'自动返工验证需检查';
   document.getElementById('validationResult').style.display='block';
   document.getElementById('validationResult').textContent=ok
-    ? '通过：系统预置缺陷样例后触发返工，Codex 完成修复，重新测试并完成复核。'
+    ? '通过：系统预置缺陷样例后触发返工，本地验证执行器完成修复，重新测试并完成复核。真实任务仍使用 Codex。'
     : '未满足完整通过条件，请把团队执行区域截图发给我。';
 }
 
@@ -1063,6 +1063,7 @@ class Handler(BaseHTTPRequestHandler):
                 "confirmed":True,
                 "validation_force_rework_once":True,
                 "validation_seed_rework_workspace":True,
+                "validation_local_rework_executor":True,
                 "analysis":{
                     "task_level":"B",
                     "summary":"创建一个极小 Python 原型，用于验证开发、测试、自动返工和复核链路。",
