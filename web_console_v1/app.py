@@ -288,13 +288,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   <h1>PDE 多智能体控制台 v2</h1>
   <div class="sub">直接告诉团队你想做什么。项目协调智能体先理解、分级、组队，再决定下一步。</div>
 
-  <div class="card">
-    <h3>执行器中心</h3>
-    <div id="executorGrid" class="grid"></div>
-  </div>
-
-  <div class="card">
-    <h3>系统维护</h3>
+  <div class="card" style="padding:12px 18px">
     <button onclick="checkUpdate()">检查更新</button>
     <button id="updateBtn" onclick="applyUpdate()" style="background:#2563eb;display:none">立即更新</button>
     <button onclick="shutdownConsole()" style="background:#6b7280">退出控制台</button>
@@ -302,10 +296,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <span id="versionBadge" class="badge">版本读取中</span>
   </div>
 
-  <div class="card">
-    <h3>Agent 身份</h3>
+  <details class="card">
+    <summary style="cursor:pointer;font-weight:700">高级设置：执行器与 Agent</summary>
+    <h3>执行器中心</h3>
+    <div id="executorGrid" class="grid"></div>
+    <h3 style="margin-top:20px">Agent 身份</h3>
     <div id="agentProfiles" class="grid"></div>
-  </div>
+  </details>
 
   <div class="card">
     <h3>项目连接中心</h3>
@@ -332,6 +329,26 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   </div>
 
   <div class="card">
+    <h3>项目验收中心</h3>
+    <div id="acceptanceSummary" style="padding:10px;background:#f8fafc;border-radius:8px">
+      尚未读取真实项目。
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <div class="stat">项目文件<b id="acceptanceFileCount">0</b></div>
+      <div class="stat">测试状态<b id="acceptanceTestStatus">未运行</b></div>
+      <div class="stat">运行入口<b id="acceptanceEntry">-</b></div>
+      <div class="stat">授权范围<b id="acceptanceScope">-</b></div>
+    </div>
+    <button onclick="refreshAcceptance()">刷新验收信息</button>
+    <button onclick="runAcceptanceTests()" style="background:#166534;margin-left:8px">运行基础测试</button>
+    <h4>文件树</h4>
+    <pre id="acceptanceTree">暂无。</pre>
+    <h4>测试结果</h4>
+    <pre id="acceptanceTestResult">尚未运行。</pre>
+  </div>
+
+  <details class="card">
+    <summary style="cursor:pointer;font-weight:700">开发 / 诊断工具</summary>
     <h3>系统回归验证</h3>
     <div style="padding:10px;background:#eff6ff;border-radius:8px;line-height:1.6">
       这里仅验证多智能体编排流程，不连接真实辅导员工作台。回归验证使用本地验证执行器，不调用 Codex/DeepSeek；真实任务仍使用真实模型。
@@ -340,7 +357,27 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <button id="budgetTestBtn" onclick="startBudgetValidation()" style="background:#0f766e;margin-left:8px">验证预算申请交互</button>
     <span id="validationBadge" class="badge">尚未验证</span>
     <pre id="validationResult" style="display:none;margin-top:12px"></pre>
-  </div>
+
+    <hr style="margin:24px 0;border:none;border-top:1px solid #e5e7eb">
+    <h3>旧版测试任务</h3>
+    <div style="color:#666;margin-bottom:8px">仅用于开发排查，日常使用无需操作。</div>
+    <label>选择任务</label>
+    <select id="task"></select>
+    <button id="start" onclick="startTask()">开始执行</button>
+    <span id="runBadge" class="badge">未运行</span>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="stat">当前状态<b id="status">-</b></div>
+      <div class="stat">Codex 调用<b id="codex">0</b></div>
+      <div class="stat">DeepSeek 调用<b id="deepseek">0</b></div>
+      <div class="stat">DeepSeek tokens<b id="tokens">0</b></div>
+    </div>
+
+    <h4>最近运行日志</h4>
+    <pre id="log">尚未运行。</pre>
+    <h4>任务历史</h4>
+    <pre id="history">暂无。</pre>
+  </details>
 
   <div class="card">
     <h3>告诉团队你现在想做什么</h3>
@@ -410,36 +447,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <pre id="teamTimeline">暂无。</pre>
   </div>
 
-  <div class="card">
-    <h3>已有测试任务</h3>
-    <label>选择任务</label>
-    <select id="task"></select>
-    <button id="start" onclick="startTask()">开始执行</button>
-    <span id="runBadge" class="badge">未运行</span>
-  </div>
-
-  <div class="card">
-    <div class="grid">
-      <div class="stat">当前状态<b id="status">-</b></div>
-      <div class="stat">Codex 调用<b id="codex">0</b></div>
-      <div class="stat">DeepSeek 调用<b id="deepseek">0</b></div>
-      <div class="stat">DeepSeek tokens<b id="tokens">0</b></div>
-    </div>
-  </div>
-
   <div id="humanCard" class="card human" style="display:none">
     <h3>需要项目负责人决策</h3>
     <div id="humanText"></div>
-  </div>
-
-  <div class="card">
-    <h3>最近运行日志</h3>
-    <pre id="log">尚未运行。</pre>
-  </div>
-
-  <div class="card">
-    <h3>任务历史</h3>
-    <pre id="history">暂无。</pre>
   </div>
 </div>
 
@@ -460,6 +470,7 @@ async function init(){
   await loadExecutors();
   await loadAgentProfiles();
   await loadProjectConnection();
+  await refreshAcceptance();
   const data=await api('/api/tasks');
   const sel=document.getElementById('task');
   for(const t of data.tasks){
@@ -573,6 +584,39 @@ async function disconnectProject(){
   });
   if(!r.ok){alert(r.error||'断开失败');return;}
   await loadProjectConnection();
+}
+
+async function refreshAcceptance(){
+  const r=await api('/api/project/acceptance');
+  if(!r.ok){
+    document.getElementById('acceptanceSummary').textContent=r.error||'尚未连接真实项目。';
+    document.getElementById('acceptanceTree').textContent='暂无。';
+    return;
+  }
+  document.getElementById('acceptanceSummary').innerHTML=
+    '当前项目：<b>'+escapeHtml(r.project||'')+'</b><br>'
+    +'路径：'+escapeHtml(r.path||'');
+  document.getElementById('acceptanceFileCount').textContent=r.file_count||0;
+  document.getElementById('acceptanceEntry').textContent=r.entry||'未检测到';
+  document.getElementById('acceptanceScope').textContent=(r.allowed_paths||[]).join(', ')||'只读';
+  document.getElementById('acceptanceTree').textContent=(r.tree||[]).join('\n')||'项目为空。';
+}
+
+async function runAcceptanceTests(){
+  const status=document.getElementById('acceptanceTestStatus');
+  const result=document.getElementById('acceptanceTestResult');
+  status.textContent='运行中';
+  result.textContent='正在运行 Python unittest...';
+  const r=await api('/api/project/acceptance/test',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!r.ok){
+    status.textContent='失败';
+    result.textContent=r.error||'测试运行失败';
+    return;
+  }
+  status.textContent=r.passed?'通过':'未通过';
+  result.textContent=(r.command||'')+'\n\n'+(r.stdout||'')+(r.stderr?'\n'+r.stderr:'');
 }
 
 async function testProjectScope(){
@@ -1059,6 +1103,49 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"executors":executor_status()})
             return
 
+        if parsed.path=="/api/project/acceptance":
+            config=load_project_connection()
+            if not config.get("connected") or not config.get("validated"):
+                self._json({"ok":False,"error":"尚未连接真实项目"},400)
+                return
+            project=Path(config["path"])
+            if not project.exists():
+                self._json({"ok":False,"error":"真实项目目录不存在"},400)
+                return
+
+            allowed=config.get("allowed_paths",[])
+            tree=[]
+            count=0
+            for base_name in allowed:
+                base=project/base_name
+                if not base.exists():
+                    continue
+                tree.append(base_name+"/")
+                for p in sorted(base.rglob("*")):
+                    if p.is_file():
+                        rel=p.relative_to(project).as_posix()
+                        tree.append("  "+rel)
+                        count+=1
+                        if count>=200:
+                            tree.append("  ...（最多显示 200 个文件）")
+                            break
+                if count>=200:
+                    break
+
+            entry="src/main.py" if (project/"src"/"main.py").exists() else ""
+            self._json({
+                "ok":True,
+                "project":config.get("name") or project.name,
+                "path":str(project),
+                "file_count":count,
+                "tree":tree,
+                "entry":entry,
+                "run_command":("python src/main.py" if entry else ""),
+                "allowed_paths":allowed,
+                "mode":config.get("mode"),
+            })
+            return
+
         if parsed.path=="/api/project":
             self._json({"config":load_project_connection()})
             return
@@ -1187,6 +1274,40 @@ class Handler(BaseHTTPRequestHandler):
             }
             save_project_connection(config)
             self._json({"ok":True,"config":config})
+            return
+
+        if self.path=="/api/project/acceptance/test":
+            config=load_project_connection()
+            if not config.get("connected") or not config.get("validated"):
+                self._json({"ok":False,"error":"尚未连接真实项目"},400)
+                return
+            project=Path(config["path"])
+            if not project.exists():
+                self._json({"ok":False,"error":"真实项目目录不存在"},400)
+                return
+            try:
+                creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if os.name=="nt" else 0
+                p=subprocess.run(
+                    ["python","-m","unittest","discover","-s","tests","-v"],
+                    cwd=project,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=180,
+                    check=False,
+                    creationflags=creationflags,
+                )
+                self._json({
+                    "ok":True,
+                    "passed":p.returncode==0,
+                    "returncode":p.returncode,
+                    "command":"python -m unittest discover -s tests -v",
+                    "stdout":p.stdout[-12000:],
+                    "stderr":p.stderr[-12000:],
+                })
+            except Exception as exc:
+                self._json({"ok":False,"error":str(exc)},500)
             return
 
         if self.path=="/api/project/scope-test":
