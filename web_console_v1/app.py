@@ -9,6 +9,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+import urllib.request
+import urllib.error
 
 from coordinator import analyze_goal, refine_goal
 from team_executor import DynamicTeamRun
@@ -36,7 +38,7 @@ TASKS = {
 RUNS = {}
 TEAM_RUNS = {}
 ANALYSES = {}
-PROJECT_APP = {"process": None, "entry": "", "url": "", "started_at": None}
+PROJECT_APP = {"process": None, "entry": "", "url": "", "started_at": None, "log_file": ""}
 LOCK = threading.Lock()
 
 
@@ -411,6 +413,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <pre id="acceptanceTree">暂无。</pre>
     <h4>测试结果</h4>
     <pre id="acceptanceTestResult">尚未运行。</pre>
+    <h4>启动日志</h4>
+    <pre id="acceptanceLaunchLog">尚未启动。</pre>
   </div>
 
   <details class="card">
@@ -737,13 +741,16 @@ async function launchAcceptedProject(){
   const r=await api('/api/project/acceptance/launch',{
     method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
   });
+  const log=document.getElementById('acceptanceLaunchLog');
   if(!r.ok){
     badge.textContent=ACCEPTANCE_RUNTIME_READY?'未启动':'等待用户入口';
     updateProjectRunButtons({running:false});
+    log.textContent=(r.error||'启动失败')+(r.log?'\n\n'+r.log:'');
     alert(r.error||'启动失败');
     return;
   }
   updateProjectRunButtons(r.status||{});
+  log.textContent=r.log||'工作台启动成功。';
   if(r.status&&r.status.url){
     window.open(r.status.url,'_blank');
   }else{
@@ -1455,6 +1462,7 @@ class Handler(BaseHTTPRequestHandler):
                     "running":running,
                     "entry":PROJECT_APP.get("entry","") if running else "",
                     "url":PROJECT_APP.get("url","") if running else "",
+                    "log_file":PROJECT_APP.get("log_file","") if running else "",
                 }
             })
             return
@@ -1634,11 +1642,25 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if os.name=="nt" else 0
+                log_dir=ROOT/"orchestrator_v1"/"runtime"/"project_app"
+                log_dir.mkdir(parents=True,exist_ok=True)
+                log_file=log_dir/"latest.log"
+
+                env=os.environ.copy()
+                src_dir=str((project/"src").resolve())
+                project_dir=str(project.resolve())
+                existing=env.get("PYTHONPATH","")
+                env["PYTHONPATH"]=os.pathsep.join(
+                    [p for p in [src_dir,project_dir,existing] if p]
+                )
+
+                log_handle=open(log_file,"w",encoding="utf-8",errors="replace")
                 proc=subprocess.Popen(
                     [sys.executable,str(entry_path)],
                     cwd=project,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    env=env,
                     creationflags=creationflags,
                 )
                 PROJECT_APP.update({
@@ -1646,15 +1668,65 @@ class Handler(BaseHTTPRequestHandler):
                     "entry":rel,
                     "url":url if kind=="web" else "",
                     "started_at":time.time(),
+                    "log_file":str(log_file),
                 })
-                time.sleep(0.5)
+
+                ready=False
+                last_error=""
+                deadline=time.time()+8
+                while time.time()<deadline:
+                    if proc.poll() is not None:
+                        break
+                    if kind!="web" or not url:
+                        ready=True
+                        break
+                    try:
+                        with urllib.request.urlopen(url,timeout=1) as resp:
+                            if 200 <= resp.status < 500:
+                                ready=True
+                                break
+                    except Exception as exc:
+                        last_error=str(exc)
+                    time.sleep(0.5)
+
+                try:
+                    log_handle.flush()
+                    log_handle.close()
+                except Exception:
+                    pass
+
+                log_text=""
+                try:
+                    log_text=log_file.read_text(encoding="utf-8",errors="replace")[-12000:]
+                except Exception:
+                    pass
+
                 if proc.poll() is not None:
-                    PROJECT_APP.update({"process":None,"entry":"","url":"","started_at":None})
-                    self._json({"ok":False,"error":"工作台启动后立即退出，请让团队检查运行入口。"},500)
+                    PROJECT_APP.update({"process":None,"entry":"","url":"","started_at":None,"log_file":""})
+                    self._json({
+                        "ok":False,
+                        "error":"工作台启动后退出。下面已经附上真实启动日志。",
+                        "log":log_text
+                    },500)
                     return
+
+                if kind=="web" and url and not ready:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    PROJECT_APP.update({"process":None,"entry":"","url":"","started_at":None})
+                    self._json({
+                        "ok":False,
+                        "error":"工作台进程仍在，但 8 秒内无法访问本地网页。可能是端口、绑定地址或启动方式有问题。",
+                        "log":(log_text+"\n"+last_error).strip()
+                    },500)
+                    return
+
                 self._json({
                     "ok":True,
-                    "status":{"running":True,"entry":rel,"url":PROJECT_APP.get("url","")}
+                    "status":{"running":True,"entry":rel,"url":PROJECT_APP.get("url","")},
+                    "log":log_text or "工作台进程已启动并通过本地访问检查。"
                 })
             except Exception as exc:
                 self._json({"ok":False,"error":str(exc)},500)
