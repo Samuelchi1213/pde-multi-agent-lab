@@ -274,3 +274,16 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 | M6.0-007 | 任务保存权限快照 | DONE |
 | M6.0-008 | 本地验证只读模式 | TODO |
 | M6.0-009 | 本地验证指定目录可写模式 | TODO |
+
+
+## Milestone 6.1｜真实项目写权限硬隔离
+
+| ID | 任务 | 状态 |
+|---|---|---|
+| M6.1-001 | 真实项目复制到隔离 staging workspace | DONE |
+| M6.1-002 | Agent 仅操作 staging 副本 | DONE |
+| M6.1-003 | 仅同步 allowed_paths 回真实项目 | DONE |
+| M6.1-004 | read_only 不写回 | DONE |
+| M6.1-005 | 非成功状态不写回真实项目 | DONE |
+| M6.1-006 | 防止 .. / 绝对路径越权同步 | DONE |
+| M6.1-007 | 本地验证 src/tests/docs 之外文件不被修改 | TODO |
