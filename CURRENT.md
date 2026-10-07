@@ -754,3 +754,17 @@ UI 修复：
 - 检测 src/main.py 作为运行入口
 - 一键运行真实项目 tests 目录的 unittest
 - 显示测试结果与文件数量
+
+
+## 2026-10-07｜项目验收中心去噪
+
+验收中心实测通过：
+- 真实项目识别正常
+- src/main.py 入口识别正常
+- tests 基础测试通过
+
+优化：
+- 文件树默认隐藏 __pycache__
+- 隐藏 .pyc / .pyo
+- 隐藏 .git / .venv / venv / node_modules / .cache / .pytest_cache
+- “项目文件”改为“有效项目文件”，避免缓存文件造成误导
