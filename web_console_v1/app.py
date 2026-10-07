@@ -318,16 +318,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <select id="projectMode">
       <option value="read_only">只读分析，不允许修改</option>
       <option value="scoped_write">允许修改指定目录</option>
-      <option value="full_write">允许修改整个项目（高风险，不建议日常使用）</option>
     </select>
 
     <label>允许修改的目录（仅 scoped_write 生效，逗号分隔）</label>
     <input id="allowedPaths" placeholder="例如：src, tests, docs">
-
-    <label style="display:flex;align-items:center;gap:8px;font-weight:normal">
-      <input id="allowGitCommit" type="checkbox" style="width:auto">
-      允许 Agent 创建 Git commit（默认关闭）
-    </label>
 
     <button onclick="validateProject()">检测项目</button>
     <button onclick="saveProjectConnection()" style="background:#166534;margin-left:8px">确认并保存授权</button>
@@ -513,12 +507,11 @@ async function loadProjectConnection(){
   if(c.connected&&c.validated){
     status.innerHTML='已连接：<b>'+escapeHtml(c.path)+'</b><br>权限：'+escapeHtml(c.mode)
       +(c.allowed_paths&&c.allowed_paths.length?'<br>允许目录：'+escapeHtml(c.allowed_paths.join(', ')):'')
-      +'<br>Git 提交：'+(c.allow_git_commit?'允许':'不允许');
+      +'<br>Git 提交：当前版本固定禁止';
     badge.textContent='真实项目已授权';
     document.getElementById('projectPath').value=c.path||'';
     document.getElementById('projectMode').value=c.mode||'read_only';
     document.getElementById('allowedPaths').value=(c.allowed_paths||[]).join(', ');
-    document.getElementById('allowGitCommit').checked=!!c.allow_git_commit;
   }else{
     status.textContent='尚未连接真实项目，所有团队任务继续在隔离工作区运行。';
     badge.textContent='隔离模式';
@@ -540,7 +533,7 @@ async function saveProjectConnection(){
   const mode=document.getElementById('projectMode').value;
   const allowed=document.getElementById('allowedPaths').value
     .split(',').map(x=>x.trim()).filter(Boolean);
-  const allowGitCommit=document.getElementById('allowGitCommit').checked;
+  const allowGitCommit=false;
 
   if(!path){alert('请输入真实项目本地路径');return;}
   if(mode==='scoped_write'&&!allowed.length){
@@ -553,7 +546,7 @@ async function saveProjectConnection(){
     +'路径：'+path+'\n'
     +'权限：'+mode+'\n'
     +'允许目录：'+(allowed.join(', ')||'无')+'\n'
-    +'允许 Git commit：'+(allowGitCommit?'是':'否')
+    +'Git commit：当前版本固定禁止'
   );
   if(!ok)return;
 
@@ -1124,9 +1117,9 @@ class Handler(BaseHTTPRequestHandler):
             raw_path=(data.get("path") or "").strip()
             mode=(data.get("mode") or "read_only").strip()
             allowed_paths=data.get("allowed_paths") or []
-            allow_git_commit=bool(data.get("allow_git_commit"))
+            allow_git_commit=False
 
-            if mode not in {"read_only","scoped_write","full_write"}:
+            if mode not in {"read_only","scoped_write"}:
                 self._json({"ok":False,"error":"未知权限模式"},400)
                 return
 
