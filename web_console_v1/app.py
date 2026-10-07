@@ -334,7 +334,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       尚未读取真实项目。
     </div>
     <div class="grid" style="margin-top:12px">
-      <div class="stat">项目文件<b id="acceptanceFileCount">0</b></div>
+      <div class="stat">有效项目文件<b id="acceptanceFileCount">0</b></div>
       <div class="stat">测试状态<b id="acceptanceTestStatus">未运行</b></div>
       <div class="stat">运行入口<b id="acceptanceEntry">-</b></div>
       <div class="stat">授权范围<b id="acceptanceScope">-</b></div>
@@ -1116,18 +1116,24 @@ class Handler(BaseHTTPRequestHandler):
             allowed=config.get("allowed_paths",[])
             tree=[]
             count=0
+            ignored_parts={"__pycache__", ".git", ".venv", "venv", "node_modules", ".cache", ".pytest_cache"}
+            ignored_suffixes={".pyc", ".pyo"}
+
             for base_name in allowed:
                 base=project/base_name
                 if not base.exists():
                     continue
                 tree.append(base_name+"/")
                 for p in sorted(base.rglob("*")):
-                    if p.is_file():
-                        rel=p.relative_to(project).as_posix()
+                    rel_path=p.relative_to(project)
+                    if any(part in ignored_parts for part in rel_path.parts):
+                        continue
+                    if p.is_file() and p.suffix.lower() not in ignored_suffixes:
+                        rel=rel_path.as_posix()
                         tree.append("  "+rel)
                         count+=1
                         if count>=200:
-                            tree.append("  ...（最多显示 200 个文件）")
+                            tree.append("  ...（最多显示 200 个有效项目文件）")
                             break
                 if count>=200:
                     break
