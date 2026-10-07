@@ -131,6 +131,63 @@ def git_pull_update():
     }
 
 
+PROJECT_CONFIG_FILE = ROOT / "orchestrator_v1" / "runtime" / "project_connection.json"
+
+
+def load_project_connection():
+    if not PROJECT_CONFIG_FILE.exists():
+        return {
+            "connected": False,
+            "path": "",
+            "mode": "isolated",
+            "allowed_paths": [],
+            "allow_git_commit": False,
+            "validated": False,
+        }
+    try:
+        data=json.loads(PROJECT_CONFIG_FILE.read_text(encoding="utf-8"))
+        data.setdefault("connected", False)
+        data.setdefault("mode", "isolated")
+        data.setdefault("allowed_paths", [])
+        data.setdefault("allow_git_commit", False)
+        data.setdefault("validated", False)
+        return data
+    except Exception:
+        return {
+            "connected": False,
+            "path": "",
+            "mode": "isolated",
+            "allowed_paths": [],
+            "allow_git_commit": False,
+            "validated": False,
+        }
+
+
+def validate_project_path(raw_path):
+    path=Path(raw_path).expanduser()
+    if not path.exists():
+        return {"ok":False,"error":"目录不存在"}
+    if not path.is_dir():
+        return {"ok":False,"error":"目标不是文件夹"}
+    git_dir=path/".git"
+    is_git=git_dir.exists()
+    name=path.name
+    return {
+        "ok":True,
+        "path":str(path.resolve()),
+        "name":name,
+        "is_git":is_git,
+    }
+
+
+def save_project_connection(config):
+    PROJECT_CONFIG_FILE.parent.mkdir(parents=True,exist_ok=True)
+    PROJECT_CONFIG_FILE.write_text(
+        json.dumps(config,ensure_ascii=False,indent=2),
+        encoding="utf-8"
+    )
+
+
 def read_json(relpath):
     path = ROOT / relpath
     if not path.exists():
@@ -251,6 +308,34 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
   </div>
 
   <div class="card">
+    <h3>项目连接中心</h3>
+    <div id="projectStatus" style="padding:10px;background:#f8fafc;border-radius:8px;margin-bottom:12px">尚未连接真实项目，所有团队任务继续在隔离工作区运行。</div>
+
+    <label>真实项目本地路径</label>
+    <input id="projectPath" placeholder="例如：D:\辅导员工作台">
+
+    <label>权限模式</label>
+    <select id="projectMode">
+      <option value="read_only">只读分析，不允许修改</option>
+      <option value="scoped_write">允许修改指定目录</option>
+      <option value="full_write">允许修改整个项目（高风险，不建议日常使用）</option>
+    </select>
+
+    <label>允许修改的目录（仅 scoped_write 生效，逗号分隔）</label>
+    <input id="allowedPaths" placeholder="例如：src, tests, docs">
+
+    <label style="display:flex;align-items:center;gap:8px;font-weight:normal">
+      <input id="allowGitCommit" type="checkbox" style="width:auto">
+      允许 Agent 创建 Git commit（默认关闭）
+    </label>
+
+    <button onclick="validateProject()">检测项目</button>
+    <button onclick="saveProjectConnection()" style="background:#166534;margin-left:8px">确认并保存授权</button>
+    <button onclick="disconnectProject()" style="background:#6b7280;margin-left:8px">断开真实项目</button>
+    <span id="projectBadge" class="badge">隔离模式</span>
+  </div>
+
+  <div class="card">
     <h3>系统回归验证</h3>
     <div style="padding:10px;background:#eff6ff;border-radius:8px;line-height:1.6">
       这里仅验证多智能体编排流程，不连接真实辅导员工作台。回归验证使用本地验证执行器，不调用 Codex/DeepSeek；真实任务仍使用真实模型。
@@ -292,6 +377,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <div id="replyArea" style="margin-top:18px">
       <label>继续和项目协调智能体说</label>
       <textarea id="ownerReply" placeholder="直接用自然语言补充即可，例如：晚返定义为超过预计返校时间30分钟；提醒先只给辅导员看；数据来源先用现有返校登记。"></textarea>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:normal;margin-top:14px">
+        <input id="useRealProject" type="checkbox" style="width:auto">
+        这次任务使用已授权的真实项目（默认不勾选）
+      </label>
       <button id="replyBtn" onclick="refineGoal()">发送补充说明</button>
       <button id="confirmBtn" onclick="confirmDraft()" style="background:#166534;margin-left:8px">确认任务草案</button>
       <span id="draftBadge" class="badge">尚未确认</span>
@@ -374,6 +463,7 @@ async function init(){
   await loadVersion();
   await loadExecutors();
   await loadAgentProfiles();
+  await loadProjectConnection();
   const data=await api('/api/tasks');
   const sel=document.getElementById('task');
   for(const t of data.tasks){
@@ -412,6 +502,82 @@ async function loadAgentProfiles(){
       +'<b style="font-size:13px">'+escapeHtml(p.executor||'')+'</b>'
       +'<div style="margin-top:6px;font-size:13px">'+escapeHtml(p.role||'')+'</div></div>';
   }).join('');
+}
+
+async function loadProjectConnection(){
+  const d=await api('/api/project');
+  const c=d.config||{};
+  const status=document.getElementById('projectStatus');
+  const badge=document.getElementById('projectBadge');
+
+  if(c.connected&&c.validated){
+    status.innerHTML='已连接：<b>'+escapeHtml(c.path)+'</b><br>权限：'+escapeHtml(c.mode)
+      +(c.allowed_paths&&c.allowed_paths.length?'<br>允许目录：'+escapeHtml(c.allowed_paths.join(', ')):'')
+      +'<br>Git 提交：'+(c.allow_git_commit?'允许':'不允许');
+    badge.textContent='真实项目已授权';
+    document.getElementById('projectPath').value=c.path||'';
+    document.getElementById('projectMode').value=c.mode||'read_only';
+    document.getElementById('allowedPaths').value=(c.allowed_paths||[]).join(', ');
+    document.getElementById('allowGitCommit').checked=!!c.allow_git_commit;
+  }else{
+    status.textContent='尚未连接真实项目，所有团队任务继续在隔离工作区运行。';
+    badge.textContent='隔离模式';
+  }
+}
+
+async function validateProject(){
+  const path=document.getElementById('projectPath').value.trim();
+  if(!path){alert('请输入真实项目本地路径');return;}
+  const r=await api('/api/project/validate',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})
+  });
+  if(!r.ok){alert(r.error||'检测失败');return;}
+  alert('项目检测通过：'+r.project.name+(r.project.is_git?'（Git 仓库）':'（非 Git 仓库）'));
+}
+
+async function saveProjectConnection(){
+  const path=document.getElementById('projectPath').value.trim();
+  const mode=document.getElementById('projectMode').value;
+  const allowed=document.getElementById('allowedPaths').value
+    .split(',').map(x=>x.trim()).filter(Boolean);
+  const allowGitCommit=document.getElementById('allowGitCommit').checked;
+
+  if(!path){alert('请输入真实项目本地路径');return;}
+  if(mode==='scoped_write'&&!allowed.length){
+    alert('选择“允许修改指定目录”时，请至少填写一个允许目录。');
+    return;
+  }
+
+  const ok=confirm(
+    '确认授权这个真实项目吗？\n\n'
+    +'路径：'+path+'\n'
+    +'权限：'+mode+'\n'
+    +'允许目录：'+(allowed.join(', ')||'无')+'\n'
+    +'允许 Git commit：'+(allowGitCommit?'是':'否')
+  );
+  if(!ok)return;
+
+  const r=await api('/api/project/connect',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      path:path,
+      mode:mode,
+      allowed_paths:allowed,
+      allow_git_commit:allowGitCommit
+    })
+  });
+  if(!r.ok){alert(r.error||'保存失败');return;}
+  await loadProjectConnection();
+  alert('真实项目授权已保存。后续只有在任务明确选择真实项目时才会使用该权限。');
+}
+
+async function disconnectProject(){
+  const r=await api('/api/project/disconnect',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!r.ok){alert(r.error||'断开失败');return;}
+  await loadProjectConnection();
 }
 
 async function checkUpdate(){
@@ -674,7 +840,10 @@ async function confirmDraft(){
   const r=await api('/api/confirm',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID})
+    body:JSON.stringify({
+      draft_id:CURRENT_DRAFT_ID,
+      use_real_project:!!document.getElementById('useRealProject')?.checked
+    })
   });
   if(!r.ok){alert(r.error||'确认失败');return;}
   document.getElementById('draftBadge').textContent='已确认';
@@ -864,6 +1033,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"executors":executor_status()})
             return
 
+        if parsed.path=="/api/project":
+            self._json({"config":load_project_connection()})
+            return
+
         if parsed.path=="/api/agents":
             try:
                 profiles=load_agent_profiles()
@@ -936,6 +1109,58 @@ class Handler(BaseHTTPRequestHandler):
             data=json.loads(body.decode("utf-8"))
         except Exception:
             self._json({"ok":False,"error":"请求格式错误"},400)
+            return
+
+        if self.path=="/api/project/validate":
+            raw_path=(data.get("path") or "").strip()
+            result=validate_project_path(raw_path)
+            if not result.get("ok"):
+                self._json(result,400)
+                return
+            self._json({"ok":True,"project":result})
+            return
+
+        if self.path=="/api/project/connect":
+            raw_path=(data.get("path") or "").strip()
+            mode=(data.get("mode") or "read_only").strip()
+            allowed_paths=data.get("allowed_paths") or []
+            allow_git_commit=bool(data.get("allow_git_commit"))
+
+            if mode not in {"read_only","scoped_write","full_write"}:
+                self._json({"ok":False,"error":"未知权限模式"},400)
+                return
+
+            checked=validate_project_path(raw_path)
+            if not checked.get("ok"):
+                self._json(checked,400)
+                return
+
+            config={
+                "connected":True,
+                "validated":True,
+                "path":checked["path"],
+                "name":checked["name"],
+                "is_git":checked["is_git"],
+                "mode":mode,
+                "allowed_paths":[str(x).strip() for x in allowed_paths if str(x).strip()],
+                "allow_git_commit":allow_git_commit,
+                "saved_at":time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            save_project_connection(config)
+            self._json({"ok":True,"config":config})
+            return
+
+        if self.path=="/api/project/disconnect":
+            config={
+                "connected":False,
+                "validated":False,
+                "path":"",
+                "mode":"isolated",
+                "allowed_paths":[],
+                "allow_git_commit":False,
+            }
+            save_project_connection(config)
+            self._json({"ok":True,"config":config})
             return
 
         if self.path=="/api/shutdown":
@@ -1037,6 +1262,13 @@ class Handler(BaseHTTPRequestHandler):
 
             draft=ANALYSES[draft_id]
             draft["confirmed"]=True
+            project_config=load_project_connection()
+            requested_real=bool(data.get("use_real_project"))
+            if requested_real and not project_config.get("connected"):
+                self._json({"ok":False,"error":"你勾选了真实项目，但当前没有已授权项目"},400)
+                return
+            draft["project_connection_snapshot"]=project_config if project_config.get("connected") else None
+            draft["use_real_project"]=requested_real
 
             out_dir=ROOT/"orchestrator_v1"/"runtime"/"drafts"
             out_dir.mkdir(parents=True,exist_ok=True)
