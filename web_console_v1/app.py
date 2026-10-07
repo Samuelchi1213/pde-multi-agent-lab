@@ -393,8 +393,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       <div class="stat">较首次节省<b id="teamSavings">-</b></div>
       <div class="stat">自动返工<b id="teamRework">0 / 2</b></div>
     </div>
-    <div style="margin-top:14px;padding:10px;background:#fff7ed;border-radius:8px">
-      当前安全范围：未指定真实目标仓库时，只在隔离工作区做原型，不修改现有产品。
+    <div id="teamSafety" style="margin-top:14px;padding:10px;background:#fff7ed;border-radius:8px">
+      当前安全范围：等待任务启动。
     </div>
     <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
@@ -730,6 +730,8 @@ async function pollValidation(kind){
   document.getElementById('teamTokens').textContent=s.deepseek_tokens||0;
   document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
   document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
+  document.getElementById('teamSafety').textContent='当前安全范围：'+(s.safety_note||'未提供');
+
   if(d.running){
     setTimeout(()=>pollValidation(kind),2000);
     return;
