@@ -463,6 +463,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
 
 <script>
 let CURRENT_DRAFT_ID = null;
+let ACCEPTANCE_RUNTIME_READY = false;
 
 async function api(path, options){
   const r=await fetch(path, options);
@@ -609,6 +610,7 @@ async function refreshAcceptance(){
   document.getElementById('acceptanceScope').textContent=(r.allowed_paths||[]).join(', ')||'只读';
   document.getElementById('acceptanceTree').textContent=(r.tree||[]).join('\n')||'项目为空。';
   const hint=document.getElementById('acceptanceRuntimeHint');
+  ACCEPTANCE_RUNTIME_READY=!!r.runtime_manifest;
   if(r.runtime_manifest){
     const m=r.runtime_manifest;
     hint.innerHTML='用户入口：<b>'+escapeHtml(m.entry||'')+'</b>'
@@ -624,8 +626,8 @@ async function refreshAcceptance(){
 
 function updateProjectRunButtons(s){
   const running=!!s.running;
-  document.getElementById('projectRunBadge').textContent=running?'运行中':'未启动';
-  document.getElementById('launchProjectBtn').disabled=running;
+  document.getElementById('projectRunBadge').textContent=running?'运行中':(ACCEPTANCE_RUNTIME_READY?'未启动':'等待用户入口');
+  document.getElementById('launchProjectBtn').disabled=running||!ACCEPTANCE_RUNTIME_READY;
   document.getElementById('stopProjectBtn').style.display=running?'inline-block':'none';
   document.getElementById('openProjectBtn').style.display=(running&&s.url)?'inline-block':'none';
 }
@@ -637,7 +639,8 @@ async function launchAcceptedProject(){
     method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
   });
   if(!r.ok){
-    badge.textContent='启动失败';
+    badge.textContent=ACCEPTANCE_RUNTIME_READY?'未启动':'等待用户入口';
+    updateProjectRunButtons({running:false});
     alert(r.error||'启动失败');
     return;
   }
