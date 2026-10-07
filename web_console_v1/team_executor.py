@@ -266,6 +266,23 @@ class DynamicTeamRun:
     def review_delivery(self, analysis, delivery, test_evidence, previous_review=None, round_no=0):
         self.event("测试智能体", "开始独立复核" if round_no == 0 else f"开始第{round_no}轮返工复核")
 
+        # 回归验证的返工后复核走确定性本地检查，不额外消耗 API。
+        if self.draft.get("validation_force_rework_once") and round_no > 0:
+            proof_file = self.workspace / "rework_proof.py"
+            proof_ok = proof_file.exists() and "AUTO_REWORK_OK" in proof_file.read_text(
+                encoding="utf-8", errors="replace"
+            )
+            tests_ok = test_evidence.get("returncode") == 0
+            review = {
+                "status": "pass" if (proof_ok and tests_ok) else "rework",
+                "summary": "验证模式：返工后本地检查通过。" if (proof_ok and tests_ok) else "验证模式：返工后仍未满足要求。",
+                "findings": [] if (proof_ok and tests_ok) else ["rework_proof.py 或 unittest 未达到预设要求"],
+                "rework_instructions": [] if (proof_ok and tests_ok) else ["确保 proof() 返回 AUTO_REWORK_OK 且 unittest 通过"],
+                "human_reason": ""
+            }
+            self.event("测试智能体", f"第{round_no}轮返工复核完成", review)
+            return review
+
         # 仅用于本地回归验证：第一轮固定制造一次 rework，
         # 后续轮次仍走真实测试/复核链路，避免依赖模型随机性。
         if self.draft.get("validation_force_rework_once") and round_no == 0:
@@ -363,6 +380,34 @@ class DynamicTeamRun:
         self.event("开发智能体", f"第{round_no}轮返工交付完成", delivery)
         return delivery
 
+    def seed_rework_validation_workspace(self):
+        """创建一个故意未满足返工要求的最小样例，避免验证阶段先跑一次完整开发。"""
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        (self.workspace / "app.py").write_text(
+            "def hello():\n    return 'hello'\n",
+            encoding="utf-8"
+        )
+        (self.workspace / "test_app.py").write_text(
+            "import unittest\nfrom app import hello\n\n"
+            "class TestApp(unittest.TestCase):\n"
+            "    def test_hello(self):\n"
+            "        self.assertEqual(hello(), 'hello')\n\n"
+            "if __name__ == '__main__':\n"
+            "    unittest.main()\n",
+            encoding="utf-8"
+        )
+        delivery = {
+            "status": "success",
+            "summary": "验证模式：系统预置最小样例，跳过首次 Codex 开发。",
+            "files_changed": ["app.py", "test_app.py"],
+            "commands_run": [],
+            "tests_passed": True,
+            "test_evidence": "基础样例可运行，但尚未满足预设返工要求。",
+            "risks": []
+        }
+        self.event("系统验证", "已预置故意不完整的最小样例", delivery)
+        return delivery
+
     def run(self):
         analysis = self.draft["analysis"]
         team = analysis.get("required_agents", [])
@@ -409,7 +454,9 @@ class DynamicTeamRun:
             self.event("架构智能体", "技术方案完成", architecture)
 
         delivery = None
-        if "开发智能体" in team:
+        if self.draft.get("validation_seed_rework_workspace"):
+            delivery = self.seed_rework_validation_workspace()
+        elif "开发智能体" in team:
             self.event("开发智能体", "开始在隔离工作区实现原型")
             developer_profile = get_agent_profile("开发智能体")
             prompt = f"""
