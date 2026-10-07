@@ -189,6 +189,64 @@ def save_project_connection(config):
     )
 
 
+def load_saved_drafts():
+    drafts_dir=ROOT/"orchestrator_v1"/"runtime"/"drafts"
+    if not drafts_dir.exists():
+        return
+    for p in sorted(drafts_dir.glob("DRAFT-*.json")):
+        try:
+            data=json.loads(p.read_text(encoding="utf-8"))
+            draft_id=p.stem
+            if isinstance(data,dict):
+                ANALYSES[draft_id]=data
+        except Exception:
+            continue
+
+
+def restore_team_runs_from_disk():
+    runs_dir=ROOT/"orchestrator_v1"/"dynamic_runs"
+    if not runs_dir.exists():
+        return
+    for run_dir in runs_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+        state_path=run_dir/"state.json"
+        if not state_path.exists():
+            continue
+        try:
+            state=json.loads(state_path.read_text(encoding="utf-8"))
+            TEAM_RUNS[run_dir.name]={"running":False,"state":state}
+        except Exception:
+            continue
+
+
+def latest_pending_team_run():
+    pending_statuses={
+        "等待人工验收",
+        "等待人工决策",
+        "等待预算确认",
+        "需要人工返工",
+        "自动返工中",
+        "准备继续",
+    }
+    candidates=[]
+    for draft_id,info in TEAM_RUNS.items():
+        state=(info or {}).get("state") or {}
+        if state.get("status") not in pending_statuses:
+            continue
+        state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+        try:
+            mtime=state_path.stat().st_mtime
+        except Exception:
+            mtime=0
+        candidates.append((mtime,draft_id,state))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True,key=lambda x:x[0])
+    _,draft_id,state=candidates[0]
+    return {"draft_id":draft_id,"state":state}
+
+
 def read_json(relpath):
     path = ROOT / relpath
     if not path.exists():
@@ -488,6 +546,7 @@ async function init(){
   await loadAgentProfiles();
   await loadProjectConnection();
   await refreshAcceptance();
+  await resumePendingTask();
   const data=await api('/api/tasks');
   const sel=document.getElementById('task');
   for(const t of data.tasks){
@@ -498,6 +557,38 @@ async function init(){
   }
   sel.onchange=refresh;
   refresh();
+}
+
+async function resumePendingTask(){
+  try{
+    const r=await api('/api/team/resume');
+    if(!r.ok||!r.pending)return;
+    CURRENT_DRAFT_ID=r.pending.draft_id;
+    const s=r.pending.state||{};
+    document.getElementById('teamCard').style.display='block';
+    document.getElementById('teamStatus').textContent=s.status||'等待恢复';
+    document.getElementById('currentAgent').textContent=s.current_agent||'-';
+    document.getElementById('teamCodex').textContent=s.codex_calls||0;
+    document.getElementById('teamTokens').textContent=s.deepseek_tokens||0;
+    document.getElementById('teamRework').textContent=(s.rework_count||0)+' / '+(s.max_reworks||2);
+    document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
+    document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
+    document.getElementById('executeBadge').textContent=s.status||'已恢复';
+    document.getElementById('executeBtn').disabled=true;
+    const safety=document.getElementById('teamSafety');
+    if(safety){
+      if(s.real_project){
+        safety.textContent='当前安全范围：已绑定真实项目 '+s.real_project
+          +'；权限 '+(s.project_mode||'未知')
+          +'；仅允许写回 '+((s.allowed_paths||[]).join(', ')||'无')
+          +'；Git commit 禁止。';
+      }else{
+        safety.textContent='当前安全范围：'+(s.safety_note||'隔离工作区');
+      }
+    }
+    // 复用正常轮询逻辑渲染人工验收/预算申请等控件。
+    pollTeam();
+  }catch(e){}
 }
 
 async function loadVersion(){
@@ -1330,6 +1421,31 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path=="/api/team/resume":
+            pending=latest_pending_team_run()
+            if not pending:
+                self._json({"ok":True,"pending":None})
+                return
+            draft_id=pending["draft_id"]
+            draft=ANALYSES.get(draft_id)
+            if not draft:
+                draft_path=ROOT/"orchestrator_v1"/"runtime"/"drafts"/f"{draft_id}.json"
+                if draft_path.exists():
+                    try:
+                        draft=json.loads(draft_path.read_text(encoding="utf-8"))
+                        ANALYSES[draft_id]=draft
+                    except Exception:
+                        draft=None
+            self._json({
+                "ok":True,
+                "pending":{
+                    "draft_id":draft_id,
+                    "state":pending["state"],
+                    "draft":draft,
+                }
+            })
+            return
+
         if parsed.path=="/api/project/acceptance/runtime":
             proc=PROJECT_APP.get("process")
             running=bool(proc is not None and proc.poll() is None)
@@ -2157,6 +2273,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    load_saved_drafts()
+    restore_team_runs_from_disk()
     server=ThreadingHTTPServer((HOST,PORT),Handler)
     actual_port=server.server_address[1]
     url=f"http://{HOST}:{actual_port}"
