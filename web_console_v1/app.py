@@ -36,6 +36,7 @@ TASKS = {
 RUNS = {}
 TEAM_RUNS = {}
 ANALYSES = {}
+PROJECT_APP = {"process": None, "entry": "", "url": "", "started_at": None}
 LOCK = threading.Lock()
 
 
@@ -341,6 +342,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     </div>
     <button onclick="refreshAcceptance()">刷新验收信息</button>
     <button onclick="runAcceptanceTests()" style="background:#166534;margin-left:8px">运行基础测试</button>
+    <button id="launchProjectBtn" onclick="launchAcceptedProject()" style="background:#2563eb;margin-left:8px">启动工作台</button>
+    <button id="openProjectBtn" onclick="openAcceptedProject()" style="background:#7c3aed;margin-left:8px;display:none">打开工作台</button>
+    <button id="stopProjectBtn" onclick="stopAcceptedProject()" style="background:#6b7280;margin-left:8px;display:none">停止工作台</button>
+    <span id="projectRunBadge" class="badge">未启动</span>
+    <div id="acceptanceRuntimeHint" style="margin-top:12px;padding:10px;background:#eff6ff;border-radius:8px">
+      尚未检测到面向用户的运行入口。
+    </div>
     <h4>文件树</h4>
     <pre id="acceptanceTree">暂无。</pre>
     <h4>测试结果</h4>
@@ -600,6 +608,62 @@ async function refreshAcceptance(){
   document.getElementById('acceptanceEntry').textContent=r.entry||'未检测到';
   document.getElementById('acceptanceScope').textContent=(r.allowed_paths||[]).join(', ')||'只读';
   document.getElementById('acceptanceTree').textContent=(r.tree||[]).join('\n')||'项目为空。';
+  const hint=document.getElementById('acceptanceRuntimeHint');
+  if(r.runtime_manifest){
+    const m=r.runtime_manifest;
+    hint.innerHTML='用户入口：<b>'+escapeHtml(m.entry||'')+'</b>'
+      +(m.type?'<br>类型：'+escapeHtml(m.type):'')
+      +(m.url?'<br>地址：'+escapeHtml(m.url):'');
+  }else{
+    hint.innerHTML='当前只检测到技术入口 <b>'+escapeHtml(r.entry||'无')+'</b>，'
+      +'还没有 docs/runtime.json 用户运行说明。<br>'
+      +'这意味着“代码可运行”不等于“你已经能直接使用这个功能”。';
+  }
+  updateProjectRunButtons(r.runtime_status||{});
+}
+
+function updateProjectRunButtons(s){
+  const running=!!s.running;
+  document.getElementById('projectRunBadge').textContent=running?'运行中':'未启动';
+  document.getElementById('launchProjectBtn').disabled=running;
+  document.getElementById('stopProjectBtn').style.display=running?'inline-block':'none';
+  document.getElementById('openProjectBtn').style.display=(running&&s.url)?'inline-block':'none';
+}
+
+async function launchAcceptedProject(){
+  const badge=document.getElementById('projectRunBadge');
+  badge.textContent='启动中...';
+  const r=await api('/api/project/acceptance/launch',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!r.ok){
+    badge.textContent='启动失败';
+    alert(r.error||'启动失败');
+    return;
+  }
+  updateProjectRunButtons(r.status||{});
+  if(r.status&&r.status.url){
+    window.open(r.status.url,'_blank');
+  }else{
+    alert('项目已启动，但当前入口不是可直接打开的网页。');
+  }
+}
+
+async function openAcceptedProject(){
+  const r=await api('/api/project/acceptance/runtime');
+  if(r.ok&&r.status&&r.status.url){
+    window.open(r.status.url,'_blank');
+  }else{
+    alert('当前没有可打开的网页地址。');
+  }
+}
+
+async function stopAcceptedProject(){
+  const r=await api('/api/project/acceptance/stop',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!r.ok){alert(r.error||'停止失败');return;}
+  updateProjectRunButtons(r.status||{});
 }
 
 async function runAcceptanceTests(){
@@ -1139,16 +1203,66 @@ class Handler(BaseHTTPRequestHandler):
                     break
 
             entry="src/main.py" if (project/"src"/"main.py").exists() else ""
+            runtime_manifest=None
+            manifest_path=project/"docs"/"runtime.json"
+            if manifest_path.exists():
+                try:
+                    raw=json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest_entry=str(raw.get("entry") or "").strip().replace("\\","/")
+                    manifest_type=str(raw.get("type") or "").strip().lower()
+                    manifest_url=str(raw.get("url") or "").strip()
+                    if (
+                        manifest_entry
+                        and not Path(manifest_entry).is_absolute()
+                        and ".." not in Path(manifest_entry).parts
+                        and any(manifest_entry==a or manifest_entry.startswith(a.rstrip("/")+"/") for a in allowed)
+                        and manifest_entry.lower().endswith(".py")
+                    ):
+                        if manifest_url and not (
+                            manifest_url.startswith("http://127.0.0.1:")
+                            or manifest_url.startswith("http://localhost:")
+                        ):
+                            manifest_url=""
+                        runtime_manifest={
+                            "entry":manifest_entry,
+                            "type":manifest_type if manifest_type in {"web","cli"} else "cli",
+                            "url":manifest_url,
+                        }
+                except Exception:
+                    runtime_manifest=None
+
+            proc=PROJECT_APP.get("process")
+            running=bool(proc is not None and proc.poll() is None)
+            runtime_status={
+                "running":running,
+                "entry":PROJECT_APP.get("entry","") if running else "",
+                "url":PROJECT_APP.get("url","") if running else "",
+            }
+
             self._json({
                 "ok":True,
                 "project":config.get("name") or project.name,
                 "path":str(project),
                 "file_count":count,
                 "tree":tree,
-                "entry":entry,
-                "run_command":("python src/main.py" if entry else ""),
+                "entry":runtime_manifest["entry"] if runtime_manifest else entry,
+                "runtime_manifest":runtime_manifest,
+                "runtime_status":runtime_status,
                 "allowed_paths":allowed,
                 "mode":config.get("mode"),
+            })
+            return
+
+        if parsed.path=="/api/project/acceptance/runtime":
+            proc=PROJECT_APP.get("process")
+            running=bool(proc is not None and proc.poll() is None)
+            self._json({
+                "ok":True,
+                "status":{
+                    "running":running,
+                    "entry":PROJECT_APP.get("entry","") if running else "",
+                    "url":PROJECT_APP.get("url","") if running else "",
+                }
             })
             return
 
@@ -1280,6 +1394,92 @@ class Handler(BaseHTTPRequestHandler):
             }
             save_project_connection(config)
             self._json({"ok":True,"config":config})
+            return
+
+        if self.path=="/api/project/acceptance/launch":
+            config=load_project_connection()
+            if not config.get("connected") or not config.get("validated"):
+                self._json({"ok":False,"error":"尚未连接真实项目"},400)
+                return
+            project=Path(config["path"])
+            manifest_path=project/"docs"/"runtime.json"
+            if not manifest_path.exists():
+                self._json({
+                    "ok":False,
+                    "error":"当前项目还没有 docs/runtime.json 用户入口说明。请先让团队补齐可操作界面和运行入口。"
+                },400)
+                return
+            try:
+                raw=json.loads(manifest_path.read_text(encoding="utf-8"))
+                rel=str(raw.get("entry") or "").strip().replace("\\","/")
+                kind=str(raw.get("type") or "cli").strip().lower()
+                url=str(raw.get("url") or "").strip()
+                allowed=config.get("allowed_paths",[])
+                if (
+                    not rel
+                    or Path(rel).is_absolute()
+                    or ".." in Path(rel).parts
+                    or not any(rel==a or rel.startswith(a.rstrip("/")+"/") for a in allowed)
+                    or not rel.lower().endswith(".py")
+                ):
+                    self._json({"ok":False,"error":"runtime.json 的 entry 不在授权目录内或不是 Python 文件"},400)
+                    return
+                entry_path=project/rel
+                if not entry_path.exists():
+                    self._json({"ok":False,"error":"runtime.json 指定的入口文件不存在"},400)
+                    return
+                if url and not (
+                    url.startswith("http://127.0.0.1:")
+                    or url.startswith("http://localhost:")
+                ):
+                    self._json({"ok":False,"error":"只允许打开本机 localhost 地址"},400)
+                    return
+
+                old=PROJECT_APP.get("process")
+                if old is not None and old.poll() is None:
+                    self._json({"ok":False,"error":"工作台已经在运行"},409)
+                    return
+
+                creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if os.name=="nt" else 0
+                proc=subprocess.Popen(
+                    [sys.executable,str(entry_path)],
+                    cwd=project,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                )
+                PROJECT_APP.update({
+                    "process":proc,
+                    "entry":rel,
+                    "url":url if kind=="web" else "",
+                    "started_at":time.time(),
+                })
+                time.sleep(0.5)
+                if proc.poll() is not None:
+                    PROJECT_APP.update({"process":None,"entry":"","url":"","started_at":None})
+                    self._json({"ok":False,"error":"工作台启动后立即退出，请让团队检查运行入口。"},500)
+                    return
+                self._json({
+                    "ok":True,
+                    "status":{"running":True,"entry":rel,"url":PROJECT_APP.get("url","")}
+                })
+            except Exception as exc:
+                self._json({"ok":False,"error":str(exc)},500)
+            return
+
+        if self.path=="/api/project/acceptance/stop":
+            proc=PROJECT_APP.get("process")
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            PROJECT_APP.update({"process":None,"entry":"","url":"","started_at":None})
+            self._json({"ok":True,"status":{"running":False,"entry":"","url":""}})
             return
 
         if self.path=="/api/project/acceptance/test":
