@@ -167,7 +167,10 @@ class DynamicTeamRun:
         self.draft = draft
         self.api_key = api_key
         self.run_dir = root / "orchestrator_v1" / "dynamic_runs" / draft_id
-        self.workspace = self.run_dir / "workspace"
+        project_cfg = draft.get("project_connection_snapshot") or {}
+        self.use_real_project = bool(draft.get("use_real_project") and project_cfg.get("connected"))
+        self.project_cfg = project_cfg
+        self.workspace = Path(project_cfg.get("path")) if self.use_real_project else (self.run_dir / "workspace")
         self.artifacts = self.run_dir / "artifacts"
         self.state_file = self.run_dir / "state.json"
         self.schema = root / "orchestrator_v1" / "schemas" / "dynamic_codex_schema.json"
@@ -189,14 +192,22 @@ class DynamicTeamRun:
             "budget_approval": None,
             "timeline": [],
             "started_at": datetime.now().isoformat(timespec="seconds"),
-            "workspace": str(self.workspace.relative_to(root)),
-            "safety_note": "未指定真实目标仓库，因此本轮只在隔离工作区执行原型，不修改现有产品代码。",
+            "workspace": str(self.workspace) if self.use_real_project else str(self.workspace.relative_to(root)),
+            "safety_note": (
+                "已明确授权真实项目；执行器必须遵守项目连接中心的权限范围。"
+                if self.use_real_project
+                else "未指定真实目标仓库，因此本轮只在隔离工作区执行原型，不修改现有产品代码。"
+            ),
+            "project_mode": project_cfg.get("mode","isolated") if self.use_real_project else "isolated",
+            "allowed_paths": project_cfg.get("allowed_paths",[]) if self.use_real_project else [],
+            "allow_git_commit": bool(project_cfg.get("allow_git_commit")) if self.use_real_project else False,
         }
 
     def save(self):
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts.mkdir(parents=True, exist_ok=True)
-        self.workspace.mkdir(parents=True, exist_ok=True)
+        if not self.use_real_project:
+            self.workspace.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(
             json.dumps(self.state, ensure_ascii=False, indent=2),
             encoding="utf-8"
@@ -401,6 +412,13 @@ class DynamicTeamRun:
 测试智能体上一轮结论：
 {json.dumps(review, ensure_ascii=False, indent=2)}
 
+权限约束：
+- 当前是否使用真实项目：{self.use_real_project}
+- 项目权限模式：{self.state.get("project_mode")}
+- 允许修改目录：{json.dumps(self.state.get("allowed_paths", []), ensure_ascii=False)}
+- 是否允许 Git commit：{self.state.get("allow_git_commit")}
+- read_only 时不得修改文件；scoped_write 时仅允许修改授权目录；未允许 Git commit 时不得提交。
+
 要求：
 - 先检查当前工作区现有实现，不要从头重做。
 - 只修复测试智能体指出的、与验收标准相关的问题。
@@ -510,9 +528,16 @@ class DynamicTeamRun:
 {json.dumps(architecture, ensure_ascii=False, indent=2) if architecture else "无"}
 
 重要安全边界：
-- 当前没有指定真实辅导员工作台仓库，所以不能声称修改了真实产品。
-- 只在当前隔离目录创建一个可验证的最小原型、示例代码、测试或设计产物。
-- 如果需求依赖真实系统上下文才能正确实现，请在 risks 中明确说明。
+- 当前是否使用真实项目：{self.use_real_project}
+- 项目权限模式：{self.state.get("project_mode")}
+- 允许修改目录：{json.dumps(self.state.get("allowed_paths", []), ensure_ascii=False)}
+- 是否允许 Git commit：{self.state.get("allow_git_commit")}
+- 如果是 isolated，只能在当前隔离目录工作，不能声称修改真实产品。
+- 如果是 read_only，不允许修改任何项目文件，只能分析并报告。
+- 如果是 scoped_write，只允许修改允许目录中的文件；其他目录只读。
+- 如果是 full_write，可以修改项目文件，但仍不得越出项目根目录。
+- 未明确允许 Git commit 时，不得执行 git commit。
+- 如果需求超出授权范围，停止并在 risks 中说明，不得绕过权限。
 - 尽量创建可运行测试，并实际执行。
 - 按给定 JSON Schema 返回交付。
 """
