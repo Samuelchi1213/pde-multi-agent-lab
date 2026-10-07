@@ -497,7 +497,6 @@ class DynamicTeamRun:
     def run_rework(self, analysis, review, round_no):
         self.state["rework_count"] = round_no
         self.state["status"] = "自动返工中"
-        self.extend_budget_for_rework(round_no)
         self.event("项目协调智能体", f"启动第{round_no}轮自动返工", {
             "reason": review.get("summary", ""),
             "instructions": review.get("rework_instructions", review.get("findings", [])),
