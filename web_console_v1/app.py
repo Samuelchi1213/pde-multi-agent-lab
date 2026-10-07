@@ -452,6 +452,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <div id="humanAcceptance" class="card human" style="display:none;margin-top:14px">
       <h4>需要你实际验收</h4>
       <div id="humanAcceptanceText"></div>
+      <button id="publishCandidateBtn" onclick="publishCandidate()" style="background:#2563eb">同步待验收版本到真实项目</button>
       <textarea id="humanAcceptanceNote" placeholder="可选：写下你的验收反馈，例如：新增学生正常，但筛选按钮有问题。"></textarea>
       <button onclick="approveHumanAcceptance()" style="background:#166534">验收通过</button>
       <button onclick="rejectHumanAcceptance()" style="background:#b91c1c">退回返工</button>
@@ -1008,6 +1009,19 @@ async function startTeamExecution(){
   pollTeam();
 }
 
+async function publishCandidate(){
+  if(!CURRENT_DRAFT_ID)return;
+  const r=await api('/api/team/publish-candidate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({draft_id:CURRENT_DRAFT_ID})
+  });
+  if(!r.ok){alert(r.error||'同步待验收版本失败');return;}
+  alert('待验收版本已同步到真实项目。请到项目验收中心点击“刷新验收信息”。');
+  await refreshAcceptance();
+  pollTeam();
+}
+
 async function approveHumanAcceptance(){
   if(!CURRENT_DRAFT_ID)return;
   const note=document.getElementById('humanAcceptanceNote').value.trim();
@@ -1082,17 +1096,21 @@ async function pollTeam(){
     document.getElementById('teamSavings').textContent='-';
   }
   const human=document.getElementById('humanAcceptance');
-  if(s.status==='等待人工决策'){
+  if(s.status==='等待人工决策' || s.status==='等待人工验收'){
     human.style.display='block';
-    let reason='请在项目验收中心实际打开并操作功能，然后在这里提交验收结果。';
+    let reason=s.status==='等待人工验收'
+      ? '待验收版本已经同步到真实项目，请在项目验收中心实际打开并操作功能。'
+      : '当前需要你做项目负责人决策。';
     const tl=s.timeline||[];
     for(let i=tl.length-1;i>=0;i--){
       const e=tl[i]||{};
-      if(e.agent==='项目协调智能体' && e.action==='升级给项目负责人'){
+      if(e.agent==='项目协调智能体' && (e.action==='升级给项目负责人' || e.action==='请项目负责人进行真实操作验收')){
         if(e.detail&&e.detail.reason)reason=e.detail.reason;
         break;
       }
     }
+    const publishBtn=document.getElementById('publishCandidateBtn');
+    if(publishBtn)publishBtn.style.display=s.candidate_synced?'none':'inline-block';
     document.getElementById('humanAcceptanceText').innerHTML=
       '<p>'+escapeHtml(reason)+'</p>'
       +'<p><b>建议先去上方“项目验收中心”点击：刷新验收信息 → 启动工作台 → 打开工作台，并完成真实操作。</b></p>';
@@ -1864,6 +1882,54 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True,"draft_id":draft_id})
             return
 
+        if self.path=="/api/team/publish-candidate":
+            draft_id=(data.get("draft_id") or "").strip()
+            if draft_id not in ANALYSES:
+                self._json({"ok":False,"error":"任务草案不存在或控制台已重启"},404)
+                return
+            state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+            if not state_path.exists():
+                self._json({"ok":False,"error":"未找到团队运行状态"},404)
+                return
+
+            draft=ANALYSES[draft_id]
+            project_cfg=draft.get("project_connection_snapshot") or {}
+            if not draft.get("use_real_project") or not project_cfg.get("connected"):
+                self._json({"ok":False,"error":"当前任务没有绑定真实项目"},400)
+                return
+
+            state=json.loads(state_path.read_text(encoding="utf-8"))
+            if state.get("status") not in {"等待人工决策","等待人工验收"}:
+                self._json({"ok":False,"error":"当前任务不是待人工验收状态"},409)
+                return
+
+            run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
+            workspace=run_dir/"workspace"
+            real_project=Path(project_cfg["path"])
+            allowed=project_cfg.get("allowed_paths") or []
+            if not workspace.exists():
+                self._json({"ok":False,"error":"隔离工作区不存在"},404)
+                return
+            try:
+                from team_executor import sync_allowed_paths
+                synced=sync_allowed_paths(workspace,real_project,allowed)
+                state["status"]="等待人工验收"
+                state["pending_human_acceptance"]=True
+                state["candidate_synced"]=True
+                state.setdefault("timeline",[]).append({
+                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "agent":"权限控制器",
+                    "action":"已手动发布待人工验收版本",
+                    "detail":{"synced_paths":synced}
+                })
+                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":state}
+                self._json({"ok":True,"synced_paths":synced,"status":"等待人工验收"})
+            except Exception as exc:
+                self._json({"ok":False,"error":str(exc)},500)
+            return
+
         if self.path=="/api/team/human-decision":
             draft_id=(data.get("draft_id") or "").strip()
             decision=(data.get("decision") or "").strip()
@@ -1876,13 +1942,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok":False,"error":"未找到团队运行状态"},404)
                 return
             state=json.loads(state_path.read_text(encoding="utf-8"))
-            if state.get("status")!="等待人工决策":
-                self._json({"ok":False,"error":"当前任务不在等待人工验收状态"},409)
+            if state.get("status") not in {"等待人工决策","等待人工验收"}:
+                self._json({"ok":False,"error":"当前任务不在等待人工验收/决策状态"},409)
                 return
 
             if decision=="approve":
                 state["status"]="已完成"
                 state["current_agent"]=""
+                state["pending_human_acceptance"]=False
                 state.setdefault("timeline",[]).append({
                     "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "agent":"项目负责人",
