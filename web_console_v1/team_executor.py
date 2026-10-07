@@ -54,6 +54,12 @@ def codex_path():
     return shutil.which("codex.cmd") or shutil.which("codex")
 
 
+def hidden_creationflags():
+    if os.name == "nt":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return 0
+
+
 def read_workspace(workspace, total_limit=16000, per_file_limit=5000):
     files = {}
     used = 0
@@ -93,6 +99,7 @@ def run_python_tests(workspace):
         errors="replace",
         timeout=180,
         check=False,
+        creationflags=hidden_creationflags(),
     )
     return {
         "command": "python -m unittest discover -v",
@@ -122,17 +129,22 @@ def run_codex(workspace, prompt, schema_path, result_path):
         "--output-last-message", str(result_path),
         "-"
     ]
-    p = subprocess.run(
-        cmd,
-        input=prompt,
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=1200,
-        check=False,
-    )
+    try:
+        p = subprocess.run(
+            cmd,
+            input=prompt,
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=900,
+            check=False,
+            creationflags=hidden_creationflags(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Codex 执行超过 15 分钟，已自动终止本轮，避免后台长期卡住。") from exc
+
     if p.returncode != 0:
         raise RuntimeError(f"Codex 执行失败：{p.returncode}\n{p.stderr[-3000:]}")
     return json.loads(result_path.read_text(encoding="utf-8"))
