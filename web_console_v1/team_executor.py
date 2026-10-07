@@ -150,6 +150,69 @@ def run_codex(workspace, prompt, schema_path, result_path):
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
+def copy_project_to_staging(source: Path, staging: Path):
+    """复制真实项目到隔离工作区，跳过常见大目录和版本库元数据。"""
+    ignore_names = {
+        ".git", ".venv", "venv", "__pycache__", "node_modules",
+        "dist", "build", ".next", ".cache"
+    }
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    for item in source.iterdir():
+        if item.name in ignore_names:
+            continue
+        target = staging / item.name
+        if item.is_dir():
+            shutil.copytree(
+                item, target,
+                ignore=shutil.ignore_patterns(*ignore_names),
+                dirs_exist_ok=True
+            )
+        elif item.is_file():
+            shutil.copy2(item, target)
+
+
+def sync_allowed_paths(staging: Path, real_project: Path, allowed_paths):
+    """只把明确授权目录从隔离工作区同步回真实项目。"""
+    synced = []
+    for raw in allowed_paths:
+        rel = Path(raw)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise RuntimeError(f"非法授权路径：{raw}")
+
+        src = (staging / rel).resolve()
+        dst = (real_project / rel).resolve()
+
+        try:
+            src.relative_to(staging.resolve())
+            dst.relative_to(real_project.resolve())
+        except ValueError as exc:
+            raise RuntimeError(f"授权路径越界：{raw}") from exc
+
+        if not src.exists():
+            continue
+
+        if src.is_dir():
+            if dst.exists() and dst.is_file():
+                dst.unlink()
+            dst.mkdir(parents=True, exist_ok=True)
+            # 先清理目标目录，再复制，确保删除/重命名也能反映。
+            for child in list(dst.iterdir()):
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+        synced.append(rel.as_posix())
+    return synced
+
+
 class BudgetApprovalRequired(RuntimeError):
     def __init__(self, role, used, budget, requested_extra, reason):
         super().__init__(reason)
@@ -170,7 +233,9 @@ class DynamicTeamRun:
         project_cfg = draft.get("project_connection_snapshot") or {}
         self.use_real_project = bool(draft.get("use_real_project") and project_cfg.get("connected"))
         self.project_cfg = project_cfg
-        self.workspace = Path(project_cfg.get("path")) if self.use_real_project else (self.run_dir / "workspace")
+        self.real_project = Path(project_cfg.get("path")) if self.use_real_project else None
+        # 无论真实项目与否，Agent 都只在隔离工作区执行。
+        self.workspace = self.run_dir / "workspace"
         self.artifacts = self.run_dir / "artifacts"
         self.state_file = self.run_dir / "state.json"
         self.schema = root / "orchestrator_v1" / "schemas" / "dynamic_codex_schema.json"
@@ -192,7 +257,8 @@ class DynamicTeamRun:
             "budget_approval": None,
             "timeline": [],
             "started_at": datetime.now().isoformat(timespec="seconds"),
-            "workspace": str(self.workspace) if self.use_real_project else str(self.workspace.relative_to(root)),
+            "workspace": str(self.workspace.relative_to(root)),
+            "real_project": str(self.real_project) if self.real_project else "",
             "safety_note": (
                 "已明确授权真实项目；执行器必须遵守项目连接中心的权限范围。"
                 if self.use_real_project
@@ -203,11 +269,50 @@ class DynamicTeamRun:
             "allow_git_commit": False,
         }
 
+    def prepare_workspace(self):
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts.mkdir(parents=True, exist_ok=True)
+
+        if self.use_real_project:
+            if not self.real_project or not self.real_project.exists():
+                raise RuntimeError("真实项目目录不存在")
+            copy_project_to_staging(self.real_project, self.workspace)
+            self.event("权限控制器", "已创建真实项目隔离副本", {
+                "real_project": str(self.real_project),
+                "staging_workspace": str(self.workspace),
+                "mode": self.state.get("project_mode"),
+                "allowed_paths": self.state.get("allowed_paths", []),
+            })
+        else:
+            self.workspace.mkdir(parents=True, exist_ok=True)
+
+    def apply_real_project_changes(self):
+        if not self.use_real_project:
+            return []
+
+        mode = self.state.get("project_mode")
+        if mode == "read_only":
+            self.event("权限控制器", "只读模式：不向真实项目写回任何文件")
+            return []
+
+        if mode != "scoped_write":
+            raise RuntimeError(f"不支持的真实项目权限模式：{mode}")
+
+        allowed = self.state.get("allowed_paths", [])
+        if not allowed:
+            raise RuntimeError("scoped_write 未配置允许修改目录")
+
+        synced = sync_allowed_paths(self.workspace, self.real_project, allowed)
+        self.event("权限控制器", "已将授权目录变更同步回真实项目", {
+            "synced_paths": synced,
+            "git_commit": False,
+        })
+        return synced
+
     def save(self):
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts.mkdir(parents=True, exist_ok=True)
-        if not self.use_real_project:
-            self.workspace.mkdir(parents=True, exist_ok=True)
+        self.workspace.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(
             json.dumps(self.state, ensure_ascii=False, indent=2),
             encoding="utf-8"
@@ -413,7 +518,8 @@ class DynamicTeamRun:
 {json.dumps(review, ensure_ascii=False, indent=2)}
 
 权限约束：
-- 当前是否使用真实项目：{self.use_real_project}
+- 当前是否绑定真实项目：{self.use_real_project}
+- 你现在操作的是隔离副本，不是直接操作真实目录
 - 项目权限模式：{self.state.get("project_mode")}
 - 允许修改目录：{json.dumps(self.state.get("allowed_paths", []), ensure_ascii=False)}
 - Git commit：当前版本固定禁止
@@ -472,6 +578,7 @@ class DynamicTeamRun:
 
         self.state["status"] = "执行中"
         self.save()
+        self.prepare_workspace()
 
         product_spec = None
         architecture = None
@@ -597,6 +704,8 @@ class DynamicTeamRun:
             self.state["status"] = "等待人工决策"
             self.event("项目协调智能体", "测试结论结构异常，升级人工确认", review)
         else:
+            if self.use_real_project:
+                self.apply_real_project_changes()
             self.state["status"] = "已完成"
 
         self.state["current_agent"] = ""
