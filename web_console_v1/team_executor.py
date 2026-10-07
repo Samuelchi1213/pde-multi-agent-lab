@@ -23,7 +23,10 @@ ROLE_PROMPTS = {
 - summary: 简短结论
 - findings: 证据化问题列表
 - rework_instructions: 仅当 rework 时给开发智能体的具体修改要求
-- human_reason: 仅当 need_human 时说明为什么必须由项目负责人决定。""",
+- human_reason: 仅当 need_human 时说明为什么必须由项目负责人决定
+- human_decision_type: 仅当 need_human 时填写 user_acceptance 或 owner_decision。
+  user_acceptance 表示代码和自动测试已满足要求，但必须由真实用户打开/操作验收；
+  owner_decision 表示方向、权限、范围或风险需要项目负责人先做决策。""",
 }
 
 
@@ -256,6 +259,8 @@ class DynamicTeamRun:
             "rework_count": 0,
             "max_reworks": 2,
             "budget_approval": None,
+            "pending_human_acceptance": False,
+            "candidate_synced": False,
             "timeline": [],
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "workspace": str(self.workspace.relative_to(root)),
@@ -688,10 +693,32 @@ class DynamicTeamRun:
                 )
 
         if review and review.get("status") == "need_human":
-            self.state["status"] = "等待人工决策"
-            self.event("项目协调智能体", "升级给项目负责人", {
-                "reason": review.get("human_reason") or review.get("summary", "需要人工决策")
-            })
+            decision_type = review.get("human_decision_type") or ""
+            reason = review.get("human_reason") or review.get("summary", "需要人工决策")
+
+            if (
+                decision_type == "user_acceptance"
+                and self.use_real_project
+                and test_evidence.get("returncode") == 0
+            ):
+                synced = self.apply_real_project_changes()
+                self.state["pending_human_acceptance"] = True
+                self.state["candidate_synced"] = True
+                self.state["status"] = "等待人工验收"
+                self.event("权限控制器", "已发布待人工验收版本", {
+                    "synced_paths": synced,
+                    "note": "自动测试已通过，仅等待真实用户操作验收。"
+                })
+                self.event("项目协调智能体", "请项目负责人进行真实操作验收", {
+                    "reason": reason,
+                    "decision_type": "user_acceptance"
+                })
+            else:
+                self.state["status"] = "等待人工决策"
+                self.event("项目协调智能体", "升级给项目负责人", {
+                    "reason": reason,
+                    "decision_type": decision_type or "owner_decision"
+                })
         elif review and review.get("status") == "rework":
             self.state["status"] = "等待人工决策"
             self.event("项目协调智能体", "自动返工次数已达上限", {
