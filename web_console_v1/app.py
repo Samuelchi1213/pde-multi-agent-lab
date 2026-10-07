@@ -512,7 +512,7 @@ async function startReworkValidation(){
   const btn=document.getElementById('reworkTestBtn');
   const badge=document.getElementById('validationBadge');
   btn.disabled=true;
-  badge.textContent='自动返工验证中...';
+  badge.textContent='自动返工验证中（通常 1–3 分钟）...';
   const r=await api('/api/validation/rework/start',{
     method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
   });
@@ -556,11 +556,11 @@ async function pollValidation(kind){
     return;
   }
   document.getElementById('reworkTestBtn').disabled=false;
-  const ok=(s.status==='已完成' && (s.rework_count||0)>=1 && (s.codex_calls||0)>=2);
+  const ok=(s.status==='已完成' && (s.rework_count||0)>=1 && (s.codex_calls||0)>=1);
   document.getElementById('validationBadge').textContent=ok?'自动返工验证通过':'自动返工验证需检查';
   document.getElementById('validationResult').style.display='block';
   document.getElementById('validationResult').textContent=ok
-    ? '通过：首次开发后触发返工，Codex 再次修改，重新测试并完成复核。'
+    ? '通过：系统预置缺陷样例后触发返工，Codex 完成修复，重新测试并完成复核。'
     : '未满足完整通过条件，请把团队执行区域截图发给我。';
 }
 
@@ -1062,6 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
                 "goal":"验证动态团队自动返工闭环，不连接真实项目。",
                 "confirmed":True,
                 "validation_force_rework_once":True,
+                "validation_seed_rework_workspace":True,
                 "analysis":{
                     "task_level":"B",
                     "summary":"创建一个极小 Python 原型，用于验证开发、测试、自动返工和复核链路。",
