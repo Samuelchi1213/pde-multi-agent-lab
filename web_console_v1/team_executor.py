@@ -200,7 +200,7 @@ class DynamicTeamRun:
             ),
             "project_mode": project_cfg.get("mode","isolated") if self.use_real_project else "isolated",
             "allowed_paths": project_cfg.get("allowed_paths",[]) if self.use_real_project else [],
-            "allow_git_commit": bool(project_cfg.get("allow_git_commit")) if self.use_real_project else False,
+            "allow_git_commit": False,
         }
 
     def save(self):
@@ -416,8 +416,8 @@ class DynamicTeamRun:
 - 当前是否使用真实项目：{self.use_real_project}
 - 项目权限模式：{self.state.get("project_mode")}
 - 允许修改目录：{json.dumps(self.state.get("allowed_paths", []), ensure_ascii=False)}
-- 是否允许 Git commit：{self.state.get("allow_git_commit")}
-- read_only 时不得修改文件；scoped_write 时仅允许修改授权目录；未允许 Git commit 时不得提交。
+- Git commit：当前版本固定禁止
+- read_only 时不得修改文件；scoped_write 时仅允许修改授权目录。
 
 要求：
 - 先检查当前工作区现有实现，不要从头重做。
@@ -535,8 +535,8 @@ class DynamicTeamRun:
 - 如果是 isolated，只能在当前隔离目录工作，不能声称修改真实产品。
 - 如果是 read_only，不允许修改任何项目文件，只能分析并报告。
 - 如果是 scoped_write，只允许修改允许目录中的文件；其他目录只读。
-- 如果是 full_write，可以修改项目文件，但仍不得越出项目根目录。
-- 未明确允许 Git commit 时，不得执行 git commit。
+- 当前版本不提供 full_write。
+- 当前版本禁止执行 git commit。
 - 如果需求超出授权范围，停止并在 risks 中说明，不得绕过权限。
 - 尽量创建可运行测试，并实际执行。
 - 按给定 JSON Schema 返回交付。
