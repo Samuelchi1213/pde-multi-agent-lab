@@ -253,6 +253,30 @@ class DynamicTeamRun:
 
     def review_delivery(self, analysis, delivery, test_evidence, previous_review=None, round_no=0):
         self.event("测试智能体", "开始独立复核" if round_no == 0 else f"开始第{round_no}轮返工复核")
+
+        # 仅用于本地回归验证：第一轮固定制造一次 rework，
+        # 后续轮次仍走真实测试/复核链路，避免依赖模型随机性。
+        if self.draft.get("validation_force_rework_once") and round_no == 0:
+            review = {
+                "status": "rework",
+                "summary": "验证模式：固定触发一次返工，用于检查自动返工路由。",
+                "findings": [
+                    "请新增 rework_proof.py，并提供 proof() 返回 AUTO_REWORK_OK。",
+                    "请新增 unittest 验证 proof() 的返回值。"
+                ],
+                "rework_instructions": [
+                    "在现有工作区增量新增 rework_proof.py。",
+                    "实现 proof()，返回字符串 AUTO_REWORK_OK。",
+                    "新增可被 unittest discover 发现的测试并实际运行。"
+                ],
+                "human_reason": ""
+            }
+            (self.artifacts / "qa_review.json").write_text(
+                json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            self.event("测试智能体", "验证模式：固定触发首次返工", review)
+            return review
+
         review_payload = {
             "acceptance_criteria": analysis.get("acceptance_criteria", []),
             "scope": analysis.get("scope", []),
