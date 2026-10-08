@@ -68,3 +68,8 @@
 ## M7-003 B1｜DeepSeek 调用检查点（待 Windows 模拟验收）
 
 已将产品、架构、QA 的真实 DeepSeek 调用入口接入步骤检查点，并保留结果不确定时停止的安全规则。详情：[B1 DeepSeek 模型调用保护](docs/PDE_M7_003_B1_DEEPSEEK_GUARD.md)。注意旧预算整队续跑的危险路径已临时停用，安全阶段级续跑与 Codex 检查点仍待下一阶段。
+
+
+## M7-003 B2｜Codex 检查点与安全发布（待本机验收）
+
+已新增 Codex 开发/返工检查点、真实项目数据隔离、安全发布闸门和 **一键综合验收（全部离线，73 项）**；详见 [B2 实施及 Windows 验收清单](docs/PDE_M7_003_B2_CODEX_AND_SAFE_RELEASE.md)。真实阶段级自动续跑尚未开放。
