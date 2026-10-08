@@ -3288,13 +3288,19 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     state=ctx["state"]
                     state["candidate_synced"]=True
+                    if ctx.get("manual_rework_release"):
+                        state["manual_rework_published"]=True
                     state["pending_human_acceptance"]=True
                     state["status"]="等待人工验收"
                     state["current_agent"]=""
                     state["safe_publish_backup"]=result["backup_path"]
                     state.setdefault("timeline",[]).append({
                         "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        "agent":"权限控制器","action":"QA 通过后安全发布待人工验收版本",
+                        "agent":"权限控制器","action":(
+                            "定向返工通过回归测试后安全发布待验收版本"
+                            if ctx.get("manual_rework_release") else
+                            "QA 通过后安全发布待人工验收版本"
+                        ),
                         "detail":result,
                     })
                     ctx["state_path"].write_text(
