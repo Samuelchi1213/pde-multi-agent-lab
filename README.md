@@ -54,3 +54,7 @@
 ## FDE Workbench 工程参考与延期功能库
 
 后续 PDE 可靠性升级可参阅 [FDE Workbench 参考研究与 PDE 延期功能库](docs/FDE_WORKBENCH_LESSONS_AND_BACKLOG.md)：包含近期任务引擎改造方向、后期功能候选、明确的延期原因与重新启动开发的条件。当前仅保存规划，尚未启动架构重构。
+
+## PDE 可靠性升级（Milestone 7）
+
+第一阶段实施记录：[任务状态一致性与中断诊断](docs/PDE_M7_002_TASK_STATE_RELIABILITY.md)。状态持久化读取、异常线程识别、原子保存和离线自检已提交；**需要 Windows 本机验收**。完整自动断点续跑尚未实现，不应主动重跑旧任务。
