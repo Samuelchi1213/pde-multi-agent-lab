@@ -354,22 +354,24 @@ class DynamicTeamRun:
         self.state["deepseek_calls"] += 1
         self.state["deepseek_tokens"] += used
         self.state["role_usage"][role] = self.state["role_usage"].get(role, 0) + used
+
+        # 模型响应已经返回并计入 usage：必须先把结果保存下来。
+        # 超过预算只限制下一次调用，不能丢弃这一次已经获得的 QA 结论。
+        self.artifacts.mkdir(parents=True, exist_ok=True)
+        receipt=self.artifacts / f"deepseek_response_{self.state['deepseek_calls']}.json"
+        receipt.write_text(
+            json.dumps({"role":role,"usage":usage,"result":result},
+                       ensure_ascii=False,indent=2),
+            encoding="utf-8"
+        )
         self.save()
-
         if self.state["deepseek_tokens"] > self.state["deepseek_token_budget"]:
-            over = self.state["deepseek_tokens"] - self.state["deepseek_token_budget"]
-            requested_extra = min(
-                4000,
-                max(1500, over + 1000)
-            )
-            raise BudgetApprovalRequired(
-                role,
-                self.state["deepseek_tokens"],
-                self.state["deepseek_token_budget"],
-                requested_extra,
-                f"{role} 已完成本次调用，但继续后续工作需要追加少量 token 预算。"
-            )
-
+            self.event("成本控制器","本次调用超出预算，已保存结果；禁止下一次未经批准的调用",{
+                "role":role,
+                "used":self.state["deepseek_tokens"],
+                "budget":self.state["deepseek_token_budget"],
+                "saved_receipt":str(receipt.relative_to(self.root)),
+            })
         return result, usage
 
     def extend_budget_for_rework(self, round_no):
