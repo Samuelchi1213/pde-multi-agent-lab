@@ -572,7 +572,8 @@ let CURRENT_DRAFT_ID = null;
 let ACCEPTANCE_RUNTIME_READY = false;
 
 async function api(path, options){
-  const r=await fetch(path, options);
+  const opts=Object.assign({cache:'no-store'},options||{});
+  const r=await fetch(path, opts);
   return await r.json();
 }
 
@@ -735,7 +736,7 @@ async function disconnectProject(){
 }
 
 async function refreshAcceptance(){
-  const r=await api('/api/project/acceptance');
+  const r=await api('/api/project/acceptance?t='+Date.now());
   if(!r.ok){
     document.getElementById('acceptanceSummary').textContent=r.error||'尚未连接真实项目。';
     document.getElementById('acceptanceTree').textContent='暂无。';
@@ -794,6 +795,7 @@ async function publishPendingFromAcceptance(){
   document.getElementById('acceptanceLaunchLog').textContent=
     '待验收版本已发布，并确认 runtime.json 已写入真实项目：\n'+(r.target_runtime||'');
   alert('待验收版本已发布到真实项目，并已验证用户入口文件存在。');
+  document.getElementById('acceptanceRuntimeHint').textContent='正在重新读取真实项目最新入口...';
   await refreshAcceptance();
 }
 
@@ -1490,6 +1492,7 @@ class Handler(BaseHTTPRequestHandler):
                 "runtime_status":runtime_status,
                 "allowed_paths":allowed,
                 "mode":config.get("mode"),
+                "read_at":time.time(),
                 "pending_candidate_available":bool(pending_candidate),
                 "pending_candidate_draft_id":pending_candidate["draft_id"] if pending_candidate else "",
             })
