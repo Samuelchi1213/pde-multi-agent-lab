@@ -3054,6 +3054,71 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True,"new_budget":approved})
             return
 
+        if self.path=="/api/team/manual-rework/start":
+            draft_id=str(data.get("draft_id") or "").strip()
+            if data.get("confirmation")!="one_codex_targeted_rework":
+                self._json({"ok":False,"error":"必须明确确认仅进行一次 Codex 定向返工"},400)
+                return
+            with LOCK:
+                if TEAM_RUNS.get(draft_id,{}).get("running"):
+                    self._json({"ok":False,"error":"本任务仍有后台工作"},409)
+                    return
+                try:
+                    from manual_rework import run_targeted_rework
+                    ctx=manual_rework_context(draft_id)
+                    state=ctx["state"]
+                    state["manual_rework_attempted"]=True
+                    state["manual_rework_published"]=False
+                    state["status"]="定向返工：准备中"
+                    state["current_agent"]="开发智能体"
+                    state.setdefault("timeline",[]).append({
+                        "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "agent":"项目负责人",
+                        "action":"已授权一次 Codex 定向返工",
+                        "detail":{
+                            "approved_scope":"历史记录、未来日期校验、默认不关闭异常",
+                            "new_deepseek_calls":0,
+                            "write_real_project":False,
+                        }
+                    })
+                    ctx["state_path"].write_text(
+                        json.dumps(state,ensure_ascii=False,indent=2),
+                        encoding="utf-8"
+                    )
+                    TEAM_RUNS[draft_id]={"running":True,"state":state}
+                except (ValueError,OSError) as exc:
+                    self._json({"ok":False,"error":str(exc)},409)
+                    return
+                except Exception as exc:
+                    self._json({"ok":False,"error":"启动定向返工失败："+str(exc)},500)
+                    return
+
+            def rework_worker():
+                try:
+                    final=run_targeted_rework(
+                        ROOT,draft_id,ctx["draft"],state,ctx["project"]
+                    )
+                except BaseException as exc:
+                    final=state
+                    final["status"]="定向返工失败（隔离成果保留）"
+                    final["manual_rework_error"]=str(exc)
+                    final["current_agent"]=""
+                    try:
+                        ctx["state_path"].write_text(
+                            json.dumps(final,ensure_ascii=False,indent=2),
+                            encoding="utf-8"
+                        )
+                    except Exception:
+                        pass
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":final}
+            threading.Thread(target=rework_worker,daemon=True).start()
+            self._json({
+                "ok":True,"draft_id":draft_id,"status":"定向返工：准备中",
+                "note":"仅运行一次 Codex + 独立 unittest；尚未修改真实项目。"
+            })
+            return
+
         if self.path=="/api/team/safe-publish":
             draft_id=str(data.get("draft_id") or "").strip()
             revision=str(data.get("revision") or "").strip()
