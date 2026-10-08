@@ -1532,6 +1532,98 @@ async function resumeQaOnly(){
   }
 }
 
+let SAFE_PUBLISH_REVISION = null;
+
+async function previewSafePublish(){
+  const previewBtn=document.getElementById('previewSafePublishBtn');
+  const confirmBtn=document.getElementById('confirmSafePublishBtn');
+  const output=document.getElementById('safePublishDetails');
+  SAFE_PUBLISH_REVISION=null;
+  confirmBtn.style.display='none';
+  previewBtn.disabled=true;
+  output.textContent='正在读取代码差异和学生数据保护情况...';
+  try{
+    const r=await api('/api/team/safe-publish-preview?draft_id='
+      +encodeURIComponent(CURRENT_DRAFT_ID)+'&t='+Date.now());
+    if(!r.ok)throw Error(r.error||'预览失败');
+    const report=[
+      '目标项目：'+r.project,
+      'QA 结论：'+(r.qa_summary||'已通过'),
+      'QA 发现：'+JSON.stringify(r.qa_findings||[]),
+      '将发布程序文件：'+r.change_count+' 个',
+      '被保护的数据/非程序文件：'+r.skipped_data_count+' 个',
+      '阻断项：'+(r.blocked||[]).length+' 个',
+      '原工作台运行中：'+(r.workbench_running?'是（先停止工作台）':'否'),
+      '',
+      '文件变更：',
+      ...(r.changes||[]).map(x=>
+        '  '+(x.action==='add'?'[新增] ':'[替换] ')+x.path),
+      '',
+      '排除的数据或非程序文件：',
+      ...(r.skipped_data||[]).slice(0,30).map(x=>'  '+x),
+      ...((r.skipped_data||[]).length>30?['  ...其余略']:[]),
+      '',
+      '阻断原因：',
+      ...(r.blocked||[]).map(x=>'  '+x),
+      '',
+      r.safety
+    ];
+    output.textContent=report.join('\n');
+    if(r.ready){
+      SAFE_PUBLISH_REVISION=r.revision;
+      confirmBtn.style.display='inline-block';
+    }else{
+      output.textContent+='\n\n当前不可发布，请先处理上面的阻断原因。';
+    }
+  }catch(e){
+    output.textContent='生成预览失败：'+String(e);
+  }finally{
+    previewBtn.disabled=false;
+  }
+}
+
+async function confirmSafePublish(){
+  if(!CURRENT_DRAFT_ID || !SAFE_PUBLISH_REVISION){
+    alert('请先查看最新的安全发布预览。');
+    return;
+  }
+  if(!confirm(
+    '确认将预览中的程序文件安全发布到真实项目？\n\n'
+    +'不删除任何现有文件，不写入学生数据，原程序文件将先备份。\n'
+    +'发布后仍需重新打开工作台进行人工验收。'
+  ))return;
+  const btn=document.getElementById('confirmSafePublishBtn');
+  btn.disabled=true;
+  try{
+    const r=await api('/api/team/safe-publish',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        draft_id:CURRENT_DRAFT_ID,
+        revision:SAFE_PUBLISH_REVISION,
+        confirmation:'publish_reviewed_candidate'
+      })
+    });
+    if(!r.ok)throw Error(r.error||'安全发布未完成');
+    SAFE_PUBLISH_REVISION=null;
+    btn.style.display='none';
+    document.getElementById('safePublishDetails').textContent=
+      '已更新 '+r.changed_files+' 个程序文件。\n'
+      +'已跳过 '+r.skipped_data+' 个数据/非程序文件。\n'
+      +'备份目录：'+r.backup_path+'\n'
+      +'下一步：项目验收中心 → 启动工作台 → 进行真实操作验收。';
+    await refreshAcceptance();
+    await pollTeam();
+  }catch(e){
+    btn.style.display='none';
+    SAFE_PUBLISH_REVISION=null;
+    document.getElementById('safePublishDetails').textContent+=' \n发布未完成：'+String(e)
+      +'\n请重新预览，勿反复点击确认。';
+    alert('安全发布失败：'+String(e));
+  }finally{
+    btn.disabled=false;
+  }
+}
+
 async function pollTeam(){
   if(!CURRENT_DRAFT_ID)return;
   let d;
