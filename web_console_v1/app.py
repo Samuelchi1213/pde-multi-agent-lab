@@ -15,7 +15,7 @@ import urllib.error
 from coordinator import analyze_goal, refine_goal
 from team_executor import DynamicTeamRun
 from agent_profiles import load_agent_profiles
-from task_state import project_team_status, read_state
+from task_state import project_team_status, read_state, atomic_write_json
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -2404,7 +2404,7 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 })
                 state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/candidate["draft_id"]/"state.json"
-                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(state_path,state)
                 with LOCK:
                     TEAM_RUNS[candidate["draft_id"]]={"running":False,"state":state}
 
@@ -2979,7 +2979,7 @@ class Handler(BaseHTTPRequestHandler):
                     "action":"已手动发布待人工验收版本",
                     "detail":{"synced_paths":synced}
                 })
-                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(state_path,state)
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":state}
                 self._json({"ok":True,"synced_paths":synced,"status":"等待人工验收"})
@@ -3013,7 +3013,7 @@ class Handler(BaseHTTPRequestHandler):
                     "action":"人工验收通过",
                     "detail":{"note":note}
                 })
-                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(state_path,state)
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":state}
                 self._json({"ok":True,"status":"已完成"})
@@ -3031,7 +3031,7 @@ class Handler(BaseHTTPRequestHandler):
                     "action":"人工验收退回返工",
                     "detail":{"note":note}
                 })
-                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(state_path,state)
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":state}
                 self._json({"ok":True,"status":"需要人工返工"})
@@ -3055,7 +3055,7 @@ class Handler(BaseHTTPRequestHandler):
             if decision=="decline":
                 state["status"]="验证通过：已选择暂停" if draft_id.startswith("VALIDATE-BUDGET-") else "已暂停"
                 state["budget_approval"]=None
-                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(state_path,state)
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":state}
                 self._json({"ok":True,"status":"已暂停"})
@@ -3075,7 +3075,7 @@ class Handler(BaseHTTPRequestHandler):
                     "action":"验证模式：批准追加预算",
                     "detail":{"added":extra,"new_budget":state["deepseek_token_budget"]}
                 })
-                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(state_path,state)
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":state}
                 self._json({"ok":True,"new_budget":state["deepseek_token_budget"],"validation":True})
@@ -3088,7 +3088,7 @@ class Handler(BaseHTTPRequestHandler):
             draft["approved_token_budget"]=approved
             state["budget_approval"]=None
             state["status"]="准备继续"
-            state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+            atomic_write_json(state_path,state)
 
             with LOCK:
                 if TEAM_RUNS.get(draft_id,{}).get("running"):
@@ -3306,7 +3306,7 @@ class Handler(BaseHTTPRequestHandler):
                         "budget_after":30000,"allow_more_than_one_call":False
                     }
                 })
-                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(state_path,state)
                 TEAM_RUNS[draft_id]={"running":True,"state":state}
 
             def qa_worker():
