@@ -75,5 +75,6 @@ def recover_once(root: Path, draft_id: str, draft: dict, api_key: str, saved: di
             "detail": str(exc),
         })
         run_dir.mkdir(parents=True, exist_ok=True)
-        state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        from task_state import atomic_write_json
+        atomic_write_json(state_file, state)
         return state
