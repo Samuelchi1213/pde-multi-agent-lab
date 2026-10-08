@@ -2018,6 +2018,34 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path=="/api/team/manual-rework/preview":
+            draft_id=parse_qs(parsed.query).get("draft_id",[""])[0]
+            with LOCK:
+                running=bool(TEAM_RUNS.get(draft_id,{}).get("running"))
+            if running:
+                self._json({"ok":False,"error":"本任务还有后台线程，请勿重复执行"},409)
+                return
+            try:
+                from manual_rework import FIX_REQUIREMENTS,MIN_REGRESSION_TESTS
+                ctx=manual_rework_context(draft_id)
+                self._json({
+                    "ok":True,
+                    "draft_id":draft_id,
+                    "project":str(ctx["project"]),
+                    "feedback":ctx["note"],
+                    "required_fixes":FIX_REQUIREMENTS.strip(),
+                    "min_tests":MIN_REGRESSION_TESTS,
+                    "codex_calls_before":int(ctx["state"].get("codex_calls") or 0),
+                    "deepseek_tokens_before":int(ctx["state"].get("deepseek_tokens") or 0),
+                    "new_deepseek_calls":0,
+                    "safety":"创建全新隔离副本，只复制程序/测试/说明文档并排除学生数据；只调用一次 Codex，随后运行完整 unittest。不会直接发布至真实项目。",
+                })
+            except (ValueError,OSError) as exc:
+                self._json({"ok":False,"error":str(exc)},409)
+            except Exception as exc:
+                self._json({"ok":False,"error":"定向返工检查失败："+str(exc)},500)
+            return
+
         if parsed.path=="/api/team/safe-publish-preview":
             draft_id=parse_qs(parsed.query).get("draft_id",[""])[0]
             with LOCK:
