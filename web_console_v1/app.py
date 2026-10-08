@@ -709,6 +709,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <button id="reworkTestBtn" onclick="startReworkValidation()" style="background:#7c3aed">验证自动返工闭环</button>
     <button id="budgetTestBtn" onclick="startBudgetValidation()" style="background:#0f766e;margin-left:8px">验证预算申请交互</button>
     <button id="taskStateTestBtn" onclick="checkTaskStateRegression()" style="background:#334155;margin-left:8px">验证任务状态恢复（离线）</button>
+    <button id="checkpointTestBtn" onclick="checkStepCheckpointRegression()" style="background:#475569;margin-left:8px">验证步骤防重复（离线）</button>
     <span id="validationBadge" class="badge">尚未验证</span>
     <pre id="validationResult" style="display:none;margin-top:12px"></pre>
 
@@ -1775,6 +1776,30 @@ async function confirmSafePublish(){
   }
 }
 
+async function checkStepCheckpointRegression(){
+  const button=document.getElementById('checkpointTestBtn');
+  const result=document.getElementById('validationResult');
+  const badge=document.getElementById('validationBadge');
+  button.disabled=true;
+  result.style.display='block';
+  result.textContent='正在运行纯本地步骤检查点测试，不调用 Codex、DeepSeek 或真实项目...';
+  badge.textContent='检查点自检中';
+  try{
+    const r=await api('/api/diagnostics/step-checkpoints/self-test?t='+Date.now());
+    if(!r.ok)throw Error(r.error||'测试无法启动');
+    result.textContent='离线步骤防重复自检：'+(r.passed?'通过':'未通过')
+      +'\n测试数量：'+r.test_count
+      +'\n退出码：'+r.returncode
+      +'\n\n'+(r.output||'无输出');
+    badge.textContent=r.passed?'步骤自检通过':'步骤自检未通过';
+  }catch(e){
+    result.textContent='步骤自检失败：'+String(e);
+    badge.textContent='步骤自检失败';
+  }finally{
+    button.disabled=false;
+  }
+}
+
 async function checkTaskStateRegression(){
   const button=document.getElementById('taskStateTestBtn');
   const result=document.getElementById('validationResult');
@@ -2007,6 +2032,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"version":p.stdout.strip() or "unknown"})
             except Exception:
                 self._json({"version":"unknown"})
+            return
+
+        if parsed.path=="/api/diagnostics/step-checkpoints/self-test":
+            # Test temporary directories only. No execution of AI or real-project tasks.
+            try:
+                cmd=[
+                    sys.executable,"-m","unittest","discover",
+                    "-s","web_console_v1","-p","test_step_checkpoints.py","-v"
+                ]
+                proc=subprocess.run(
+                    cmd,cwd=ROOT,capture_output=True,text=True,encoding="utf-8",
+                    errors="replace",timeout=30,check=False,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0),
+                )
+                combined=((proc.stdout or "")+"\n"+(proc.stderr or ""))[-8000:]
+                import re
+                matched=re.search(r"Ran\s+(\d+)\s+tests?",combined)
+                count=int(matched.group(1)) if matched else 0
+                self._json({
+                    "ok":True,"passed":proc.returncode==0 and count>=18,
+                    "test_count":count,"returncode":proc.returncode,
+                    "output":combined,"models_invoked":False,
+                })
+            except Exception as exc:
+                self._json({"ok":False,"error":"离线检查点测试失败："+str(exc)},500)
             return
 
         if parsed.path=="/api/diagnostics/task-state/self-test":
