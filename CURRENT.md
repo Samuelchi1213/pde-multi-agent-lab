@@ -918,3 +918,12 @@ UI 修复：
 - 现在读取/启动统一校验，支持授权目录内 .py/.ps1。优先使用 src/web_server.py 直接运行 Web 服务（如存在）。
 - 不解析或执行 manifest 的 start_command 字符串；启动前检查 localhost 端口是否占用。
 - 仍需在用户 Windows 电脑上实际验证。
+
+
+## 2026-10-08｜工作台启动自动避开占用端口
+- 已确认 src/start_workbench.ps1 -> src/web_server.py，默认端口 8765 与本地其他程序冲突。
+- 控制台启动时先检查端口；若被占用且运行的是授权 Python Web 服务，则临时选择空闲 localhost 端口。
+- 使用 port_runner.py 只在内存中替换数字端口字面量，并设置常见 PORT 环境变量，不写入项目源码/runtime.json，不停止原有服务。
+- 成功必须通过实际新 URL 健康检查，页面展示本次实际访问地址。
+- 若服务不兼容动态端口，会将失败原因写入启动日志，下一步需调整项目启动程序。
+- Windows 真实启动尚待项目负责人点击验证。
