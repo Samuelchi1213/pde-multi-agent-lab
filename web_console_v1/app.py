@@ -291,7 +291,7 @@ def latest_resumable_team_run():
         "等待人工验收","等待人工决策","等待预算确认",
         "需要人工返工","准备继续",
         "执行失败","验证失败","执行中断（需要检查）",
-        "测试复核恢复中","复核通过（待安全发布）",
+        "测试复核恢复中","复核中断（已保留成果）","复核通过（待安全发布）",
         "复核发现需返工","复核等待负责人决定","复核失败（保留成果）",
     }
     candidates=[]
@@ -319,11 +319,16 @@ def latest_resumable_team_run():
             } else disk_state or memory_state
         if state.get("status") not in statuses and not live:
             continue
-        if not live and state.get("status") in {"准备中","执行中","自动返工中"}:
+        if not live and state.get("status") in {"准备中","执行中","自动返工中","测试复核恢复中"}:
             state=dict(state)
-            state["status"]="执行中断（需要检查）"
+            qa_interrupted=state.get("status")=="测试复核恢复中"
+            state["status"]="复核中断（已保留成果）" if qa_interrupted else "执行中断（需要检查）"
             state["current_agent"]=""
-            state["diagnostic_note"]="当前没有后台执行线程。保留现有候选代码，请先检查日志，勿重新启动本任务。"
+            state["diagnostic_note"]=(
+                "单独 QA 复核线程已不存在。恢复尝试已记录，不能自动重复付费调用；请检查 QA 结果文件。"
+                if qa_interrupted else
+                "当前没有后台执行线程。保留现有候选代码，请先检查日志，勿重新启动本任务。"
+            )
         candidates.append((1 if live else 0,modified,draft_id,state,live))
     if not candidates:
         return None
@@ -1555,7 +1560,7 @@ async function pollTeam(){
 
   const running=d.running;
   const interrupted=!running && (
-    ['执行中','准备中','自动返工中','执行中断（需要检查）','执行失败','验证失败'].includes(s.status)
+    ['执行中','准备中','自动返工中','执行中断（需要检查）','复核中断（已保留成果）','执行失败','验证失败'].includes(s.status)
   );
   const recoveryBtn=document.getElementById('inspectInterruptedBtn');
   if(recoveryBtn)recoveryBtn.style.display=interrupted?'inline-block':'none';
@@ -1891,6 +1896,8 @@ class Handler(BaseHTTPRequestHandler):
                 "safe_next_step":(
                     "后台仍在运行：请保持当前任务，不要重新启动。"
                     if running else
+                    "单独复核已尝试，但 QA 报告仍缺失。不会自动重复收费调用；请保留隔离成果并反馈复核中断信息。"
+                    if state.get("qa_resume_attempted") and not qa_file.is_file() else
                     "独立测试证据已通过且 QA 文件存在：先查看保存的 QA 结论。"
                     if test_exit==0 and qa_file.is_file() else
                     "候选工作区和自动测试通过记录存在，但没有保存的 QA 结论。需要单独恢复复核；请勿重跑整个开发任务。"
@@ -1934,11 +1941,16 @@ class Handler(BaseHTTPRequestHandler):
                 state=disk_state or memory_state
 
             # 控制台重启后，旧任务不能假装仍然在运行。
-            if not running and state.get("status") in {"执行中","准备中","自动返工中"}:
+            if not running and state.get("status") in {"执行中","准备中","自动返工中","测试复核恢复中"}:
                 state=dict(state)
-                state["status"]="执行中断（需要检查）"
+                qa_stopped=state.get("status")=="测试复核恢复中"
+                state["status"]="复核中断（已保留成果）" if qa_stopped else "执行中断（需要检查）"
                 state["current_agent"]=""
-                state["diagnostic_note"]="后台执行线程已不存在，但上次落盘状态尚无最终结论。现有隔离工作区已保留，请勿直接重复启动同一草案。"
+                state["diagnostic_note"]=(
+                    "单独 QA 复核已中断；已有尝试记录，禁止自动重复调用。"
+                    if qa_stopped else
+                    "后台执行线程已不存在，但上次落盘状态尚无最终结论。现有隔离工作区已保留，请勿直接重复启动同一草案。"
+                )
 
             age_seconds=None
             if state_path.exists():
