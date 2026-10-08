@@ -152,7 +152,21 @@ def run_targeted_rework(root: Path, draft_id: str, draft: dict, state: dict,
         rework_dir.mkdir(parents=True, exist_ok=True)
         schema = root / "orchestrator_v1" / "schemas" / "dynamic_codex_schema.json"
         result_file = rework_dir / "codex_rework_delivery.json"
-        delivery = run_codex(workspace, prompt, schema, result_file)
+        from codex_checkpoints import execute_codex_step
+        delivery, reused = execute_codex_step(
+            run_dir=rework_dir,
+            workspace=workspace,
+            step_id="manual.rework.1",
+            prompt=prompt,
+            schema_path=schema,
+            result_path=result_file,
+            executor=run_codex,
+        )
+        if reused:
+            # Normal manual rework never auto-restarts. This is defensive only.
+            _event(state_file,state,"系统","复用已验证的定向返工回执",{
+                "step_id":"manual.rework.1","model_called":False
+            })
         state["codex_calls"] = int(state.get("codex_calls") or 0) + 1
         state["manual_rework_delivery"] = str(result_file.relative_to(root))
         _event(state_file, state, "开发智能体", "定向修复代码已交付", {
