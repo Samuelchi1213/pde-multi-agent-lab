@@ -43,6 +43,17 @@ PROJECT_APP = {"process": None, "entry": "", "url": "", "started_at": None, "log
 LOCK = threading.Lock()
 
 
+def start_team_worker(draft_id, worker):
+    """Track the actual worker thread to detect a stopped or crashed worker."""
+    thread=threading.Thread(target=worker,daemon=True)
+    thread.start()
+    with LOCK:
+        info=TEAM_RUNS.get(draft_id)
+        if isinstance(info,dict) and info.get("running"):
+            info["thread"]=thread
+    return thread
+
+
 def get_deepseek_key():
     return (os.getenv("DEEPSEEK_API_KEY") or "").strip()
 
@@ -2883,7 +2894,7 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":state}
 
-            threading.Thread(target=validation_worker,daemon=True).start()
+            start_team_worker(draft_id,validation_worker)
             self._json({"ok":True,"draft_id":draft_id})
             return
 
@@ -3116,7 +3127,7 @@ class Handler(BaseHTTPRequestHandler):
                             "status":"执行失败",
                             "timeline":[{"agent":"系统","action":"继续执行失败","detail":str(exc)}]
                         }}
-            threading.Thread(target=resume_worker,daemon=True).start()
+            start_team_worker(draft_id,resume_worker)
             self._json({"ok":True,"new_budget":approved})
             return
 
@@ -3172,7 +3183,7 @@ class Handler(BaseHTTPRequestHandler):
                         pass
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":final}
-            threading.Thread(target=rework_worker,daemon=True).start()
+            start_team_worker(draft_id,rework_worker)
             self._json({
                 "ok":True,"draft_id":draft_id,"status":"定向返工：准备中",
                 "note":"仅运行一次 Codex + 独立 unittest；尚未修改真实项目。"
@@ -3305,7 +3316,7 @@ class Handler(BaseHTTPRequestHandler):
                 final=recover_once(ROOT,draft_id,draft,key,state)
                 with LOCK:
                     TEAM_RUNS[draft_id]={"running":False,"state":final}
-            threading.Thread(target=qa_worker,daemon=True).start()
+            start_team_worker(draft_id,qa_worker)
             self._json({
                 "ok":True,"draft_id":draft_id,"status":"测试复核恢复中",
                 "note":"仅使用历史 Codex 交付与测试证据，未修改项目源文件。"
@@ -3388,7 +3399,7 @@ class Handler(BaseHTTPRequestHandler):
                     with LOCK:
                         TEAM_RUNS[draft_id]={"running":False,"state":state}
 
-            threading.Thread(target=worker,daemon=True).start()
+            start_team_worker(draft_id,worker)
             self._json({"ok":True,"draft_id":draft_id})
             return
 
