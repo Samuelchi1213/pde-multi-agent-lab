@@ -864,3 +864,22 @@ UI 修复：
 - 直接在项目验收中心显示“发布待验收版本”
 - 点击后按 scoped_write 规则仅同步授权目录
 - 发布完成后自动刷新验收信息，无需返回团队执行区寻找按钮
+
+
+## 2026-10-08｜待验收版本发布后强制校验
+
+现象：
+- 用户点击“发布待验收版本”后，验收中心仍显示真实项目缺少 docs/runtime.json。
+
+修复：
+- 发布完成后立即强制检查真实项目 docs/runtime.json
+- 若不存在，不再返回“发布成功”
+- 直接输出诊断信息：
+  - draft_id
+  - staging workspace
+  - staging runtime.json 是否存在
+  - 真实项目路径
+  - 目标 runtime.json 路径
+  - allowed_paths
+  - synced_paths
+- 验收中心启动日志区域显示发布诊断
