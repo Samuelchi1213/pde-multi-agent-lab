@@ -155,27 +155,59 @@ def run_codex(workspace, prompt, schema_path, result_path):
 
 
 def copy_project_to_staging(source: Path, staging: Path):
-    """复制真实项目到隔离工作区，跳过常见大目录和版本库元数据。"""
-    ignore_names = {
-        ".git", ".venv", "venv", "__pycache__", "node_modules",
-        "dist", "build", ".next", ".cache"
-    }
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True, exist_ok=True)
+    """Copy only reviewable project code; never wipe staging or copy private data.
 
-    for item in source.iterdir():
-        if item.name in ignore_names:
-            continue
-        target = staging / item.name
-        if item.is_dir():
-            shutil.copytree(
-                item, target,
-                ignore=shutil.ignore_patterns(*ignore_names),
-                dirs_exist_ok=True
-            )
-        elif item.is_file():
-            shutil.copy2(item, target)
+    This snapshot is used for NEW tasks. An existing non-empty workspace is an
+    interruption/duplicate, not permission to delete and recreate it.
+    """
+    source=Path(source).resolve()
+    staging=Path(staging)
+    if not source.is_dir() or source.is_symlink() or staging.is_symlink():
+        raise RuntimeError("真实项目或隔离工作区路径不可靠")
+    if staging.exists() and any(staging.iterdir()):
+        raise RuntimeError("隔离工作区已有文件；为防止重跑覆盖，拒绝重新复制")
+    staging.mkdir(parents=True,exist_ok=True)
+
+    ignored_dirs={
+        ".git",".venv","venv","__pycache__","node_modules","dist","build",
+        ".next",".cache",".pytest_cache",".mypy_cache","data","uploads",
+        "backups","secrets","logs","private","credentials",
+    }
+    allowed_suffixes={
+        ".py",".js",".jsx",".ts",".tsx",".html",".css",".md",".txt",
+        ".toml",".ini",".yaml",".yml",".json",".ps1",".bat",".vbs",".cfg",
+    }
+    secret_filenames={
+        "return_status.json","attendance_records.json","credentials.json",
+        "id_rsa","id_ed25519","known_hosts","auth.json",
+    }
+    from pathlib import Path as _Path
+    for current,dirs,files in os.walk(source,followlinks=False):
+        base=_Path(current)
+        rel_base=base.relative_to(source)
+        dirs[:]=[
+            x for x in dirs
+            if x.lower() not in ignored_dirs and not (base/x).is_symlink()
+        ]
+        for filename in files:
+            item=base/filename
+            low=filename.lower()
+            if item.is_symlink() or item.suffix.lower() not in allowed_suffixes:
+                continue
+            if low.startswith(".env") or low in secret_filenames:
+                continue
+            rel=rel_base/filename
+            parts=[part.lower() for part in rel.parts]
+            if any(part in ignored_dirs for part in parts[:-1]):
+                continue
+            # Under src, JSON is more likely to be live application records.
+            if item.suffix.lower()==".json" and parts[0]=="src":
+                continue
+            if item.stat().st_size>5*1024*1024:
+                continue
+            dest=staging/rel
+            dest.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(item,dest)
 
 
 def sync_allowed_paths(staging: Path, real_project: Path, allowed_paths):
