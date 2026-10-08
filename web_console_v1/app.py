@@ -284,6 +284,52 @@ def latest_pending_team_run():
     return {"draft_id":draft_id,"state":state}
 
 
+def latest_resumable_team_run():
+    """供页面恢复显示使用；与验收发布候选查找分开，绝不自动重跑任务。"""
+    statuses={
+        "准备中","执行中","自动返工中",
+        "等待人工验收","等待人工决策","等待预算确认",
+        "需要人工返工","准备继续",
+        "执行失败","验证失败","执行中断（需要检查）",
+    }
+    candidates=[]
+    for draft_id,info in TEAM_RUNS.items():
+        if not isinstance(info,dict):
+            continue
+        state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+        memory_state=info.get("state") or {}
+        disk_state={}
+        modified=0
+        if state_path.exists():
+            try:
+                modified=state_path.stat().st_mtime
+                disk_state=json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError,ValueError):
+                disk_state={}
+        live=bool(info.get("running"))
+        # 后台仍运行时使用实时磁盘进度；已结束时优先采用内存最终结果。
+        if live:
+            state=disk_state or memory_state
+        else:
+            state=memory_state if memory_state.get("status") in {
+                "执行失败","验证失败","已完成","等待人工验收",
+                "等待人工决策","等待预算确认","需要人工返工"
+            } else disk_state or memory_state
+        if state.get("status") not in statuses and not live:
+            continue
+        if not live and state.get("status") in {"准备中","执行中","自动返工中"}:
+            state=dict(state)
+            state["status"]="执行中断（需要检查）"
+            state["current_agent"]=""
+            state["diagnostic_note"]="当前没有后台执行线程。保留现有候选代码，请先检查日志，勿重新启动本任务。"
+        candidates.append((1 if live else 0,modified,draft_id,state,live))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True,key=lambda x:(x[0],x[1]))
+    _,_,draft_id,state,live=candidates[0]
+    return {"draft_id":draft_id,"state":state,"running":live}
+
+
 def resolve_project_runtime(project, allowed):
     """读取用户入口；不执行 runtime.json 的 start_command 字符串。"""
     path=project/"docs"/"runtime.json"
@@ -682,7 +728,7 @@ async function resumePendingTask(){
     document.getElementById('teamRework').textContent=(s.rework_count||0)+' / '+(s.max_reworks||2);
     document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
     document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
-    document.getElementById('executeBadge').textContent=s.status||'已恢复';
+    document.getElementById('executeBadge').textContent=r.pending.running?'正在执行 · 已恢复显示':(s.status||'已恢复');
     document.getElementById('executeBtn').disabled=true;
     const safety=document.getElementById('teamSafety');
     if(safety){
@@ -695,9 +741,12 @@ async function resumePendingTask(){
         safety.textContent='当前安全范围：'+(s.safety_note||'隔离工作区');
       }
     }
-    // 复用正常轮询逻辑渲染人工验收/预算申请等控件。
+    // 只恢复页面观察与轮询，不触发团队再次执行。
     pollTeam();
-  }catch(e){}
+  }catch(e){
+    const badge=document.getElementById('executeBadge');
+    if(badge)badge.textContent='恢复任务失败：'+String(e);
+  }
 }
 
 async function loadVersion(){
@@ -1604,7 +1653,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path=="/api/team/resume":
-            pending=latest_pending_team_run()
+            pending=latest_resumable_team_run()
             if not pending:
                 self._json({"ok":True,"pending":None})
                 return
@@ -1623,6 +1672,7 @@ class Handler(BaseHTTPRequestHandler):
                 "pending":{
                     "draft_id":draft_id,
                     "state":pending["state"],
+                    "running":pending.get("running",False),
                     "draft":draft,
                 }
             })
