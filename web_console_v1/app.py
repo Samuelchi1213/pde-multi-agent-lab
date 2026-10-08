@@ -380,7 +380,7 @@ def manual_rework_context(draft_id):
 
 
 def safe_candidate_context(draft_id):
-    """Validate independent QA, connected project, test evidence, and permissions."""
+    """Read-only release gate for original QA or the separately tested manual rework."""
     draft=ANALYSES.get(draft_id)
     if not draft or not draft.get("confirmed") or not draft.get("use_real_project"):
         raise ValueError("任务未确认绑定真实项目")
@@ -399,11 +399,43 @@ def safe_candidate_context(draft_id):
         raise ValueError("原任务授权目录与当前授权目录不一致")
     run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
     state_path=run_dir/"state.json"
+    if not state_path.is_file():
+        raise ValueError("团队状态不存在")
+    state=json.loads(state_path.read_text(encoding="utf-8"))
+    manual_status=state.get("status")=="定向返工测试通过（待安全发布）"
+    if manual_status:
+        if state.get("manual_rework_published"):
+            raise ValueError("本轮定向返工候选版本已发布")
+        if not state.get("manual_rework_tests_passed"):
+            raise ValueError("本轮定向返工自动回归测试未通过")
+        if int(state.get("manual_rework_test_count") or 0)<32:
+            raise ValueError("本轮定向返工回归测试数量不足")
+        workspace_rel=str(state.get("manual_rework_workspace") or "")
+        workdir=(ROOT/workspace_rel).resolve()
+        expected=(run_dir/"manual_rework_1"/"workspace").resolve()
+        if workdir!=expected or not workdir.is_dir():
+            raise ValueError("定向返工隔离工作区不匹配")
+        evidence=run_dir/"manual_rework_1"/"regression_tests.json"
+        if not evidence.is_file():
+            raise ValueError("定向返工回归测试报告缺失")
+        tests=json.loads(evidence.read_text(encoding="utf-8"))
+        if tests.get("returncode")!=0:
+            raise ValueError("定向返工自动测试记录显示失败")
+        review={
+            "summary":"仅 Codex 定向修复；独立 Python 回归测试已通过。未对修改后代码再次调用 DeepSeek QA，仍需负责人浏览器人工验收。",
+            "findings":[],
+            "status":"local_regression_pass",
+        }
+        return {
+            "state":state,"review":review,"state_path":state_path,
+            "workspace":workdir,"project":original,"allowed":allowed,
+            "manual_rework_release":True,
+        }
+
     qa_path=run_dir/"artifacts"/"qa_review.json"
     workspace=run_dir/"workspace"
-    if not (state_path.is_file() and qa_path.is_file() and workspace.is_dir()):
-        raise ValueError("隔离工作区、QA 报告或任务状态不存在")
-    state=json.loads(state_path.read_text(encoding="utf-8"))
+    if not (qa_path.is_file() and workspace.is_dir()):
+        raise ValueError("原始隔离工作区或 QA 报告缺失")
     review=json.loads(qa_path.read_text(encoding="utf-8"))
     if state.get("status")!="复核通过（待安全发布）" or not state.get("qa_passed"):
         raise ValueError("当前任务尚未正式通过独立 QA")
@@ -424,6 +456,7 @@ def safe_candidate_context(draft_id):
     return {
         "state":state,"review":review,"state_path":state_path,
         "workspace":workspace,"project":original,"allowed":allowed,
+        "manual_rework_release":False,
     }
 
 
