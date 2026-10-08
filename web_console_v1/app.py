@@ -3255,45 +3255,6 @@ class Handler(BaseHTTPRequestHandler):
             },409)
             return
 
-            current_budget=int(req.get("budget") or state.get("deepseek_token_budget") or 16000)
-            extra=int(req.get("requested_extra") or 3000)
-            approved=min(current_budget+extra,30000)
-            draft=ANALYSES[draft_id]
-            draft["approved_token_budget"]=approved
-            state["budget_approval"]=None
-            state["status"]="准备继续"
-            atomic_write_json(state_path,state)
-
-            with LOCK:
-                if TEAM_RUNS.get(draft_id,{}).get("running"):
-                    self._json({"ok":False,"error":"团队仍在运行"},409)
-                    return
-                TEAM_RUNS[draft_id]={"running":True,"state":state}
-
-            def resume_worker():
-                runner=None
-                try:
-                    runner=DynamicTeamRun(ROOT,draft_id,draft,get_deepseek_key())
-                    # 保留现有工作区，重新执行时 Codex 会基于同一目录继续；预算使用新上限。
-                    runner.state["deepseek_token_budget"]=approved
-                    runner.state["status"]="继续执行"
-                    runner.event("成本控制器","项目负责人已批准追加预算",{
-                        "new_budget":approved,
-                        "added":extra,
-                    })
-                    result=runner.run()
-                    with LOCK:
-                        TEAM_RUNS[draft_id]={"running":False,"state":result}
-                except Exception as exc:
-                    with LOCK:
-                        TEAM_RUNS[draft_id]={"running":False,"state":{
-                            "status":"执行失败",
-                            "timeline":[{"agent":"系统","action":"继续执行失败","detail":str(exc)}]
-                        }}
-            start_team_worker(draft_id,resume_worker)
-            self._json({"ok":True,"new_budget":approved})
-            return
-
         if self.path=="/api/team/manual-rework/start":
             draft_id=str(data.get("draft_id") or "").strip()
             if data.get("confirmation")!="one_codex_targeted_rework":
