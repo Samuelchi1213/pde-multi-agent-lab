@@ -47,11 +47,9 @@ def utc_like_now():
 
 
 def _atomic_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".manual-rework.tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, path)
+    # Share the same crash-safe atomic writer with all other PDE task states.
+    from task_state import atomic_write_json
+    atomic_write_json(Path(path), value)
 
 
 def last_rejection(state):
