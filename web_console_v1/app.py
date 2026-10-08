@@ -1625,6 +1625,71 @@ async function resumeQaOnly(){
   }
 }
 
+async function previewManualRework(){
+  if(!CURRENT_DRAFT_ID){alert('未定位到当前任务');return;}
+  const p=document.getElementById('manualPreviewBtn');
+  const b=document.getElementById('manualStartBtn');
+  const d=document.getElementById('manualReworkDetails');
+  b.style.display='none';
+  p.disabled=true;
+  d.textContent='正在检查退回意见、项目权限与 Codex 执行条件...';
+  try{
+    const r=await api('/api/team/manual-rework/preview?draft_id='
+      +encodeURIComponent(CURRENT_DRAFT_ID)+'&t='+Date.now());
+    if(!r.ok)throw Error(r.error||'返工预检未通过');
+    d.textContent=[
+      '项目：'+r.project,
+      '已使用 Codex：'+r.codex_calls_before+' 次',
+      '本次新增 DeepSeek 调用：0',
+      '预计操作：单次 Codex 修改 + 完整 Python unittest',
+      '最低测试数量：'+r.min_tests+' 项',
+      '',
+      '此前人工反馈：',
+      r.feedback||'（无）',
+      '',
+      '本次锁定的返工范围：',
+      r.required_fixes,
+      '',
+      r.safety
+    ].join('\n');
+    b.style.display='inline-block';
+  }catch(e){
+    d.textContent='返工预检失败：'+String(e);
+  }finally{p.disabled=false;}
+}
+
+async function confirmManualRework(){
+  if(!CURRENT_DRAFT_ID){alert('当前任务不存在');return;}
+  if(!confirm(
+    '确认只运行一次 Codex 定向返工？\n\n'
+    +'仅修复历史记录、日期校验、默认不关闭异常三项问题。\n'
+    +'本次会使用 Codex 额度，但不调用 DeepSeek。\n'
+    +'创建新的隔离代码副本，运行回归测试后停下，绝不自动修改真实项目。'
+  ))return;
+  const btn=document.getElementById('manualStartBtn');
+  btn.disabled=true;btn.textContent='启动单次 Codex 中...';
+  try{
+    const r=await api('/api/team/manual-rework/start',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        draft_id:CURRENT_DRAFT_ID,
+        confirmation:'one_codex_targeted_rework'
+      })
+    });
+    if(!r.ok)throw Error(r.error||'启动失败');
+    btn.style.display='none';
+    document.getElementById('manualReworkDetails').textContent=
+      '已开始 Codex 定向返工。\n'
+      +'运行时将独立建立新工作区，不修改原项目。'
+      +'如果回归测试通过，会出现“查看安全发布预览”。';
+    await pollTeam();
+  }catch(e){
+    btn.disabled=false;btn.textContent='确认只运行一次 Codex 定向返工';
+    document.getElementById('manualReworkDetails').textContent=
+      '启动失败（不会自动重试）：'+String(e);
+  }
+}
+
 let SAFE_PUBLISH_REVISION = null;
 
 async function previewSafePublish(){
