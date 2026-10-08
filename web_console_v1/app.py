@@ -222,6 +222,41 @@ def restore_team_runs_from_disk():
             continue
 
 
+def latest_publishable_candidate():
+    pending=latest_pending_team_run()
+    if not pending:
+        return None
+    draft_id=pending["draft_id"]
+    state=pending["state"] or {}
+    if state.get("status") not in {"等待人工决策","等待人工验收","需要人工返工"}:
+        return None
+
+    draft=ANALYSES.get(draft_id)
+    if not draft:
+        draft_path=ROOT/"orchestrator_v1"/"runtime"/"drafts"/f"{draft_id}.json"
+        if draft_path.exists():
+            try:
+                draft=json.loads(draft_path.read_text(encoding="utf-8"))
+                ANALYSES[draft_id]=draft
+            except Exception:
+                draft=None
+    if not draft or not draft.get("use_real_project"):
+        return None
+
+    workspace=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"workspace"
+    runtime_path=workspace/"docs"/"runtime.json"
+    if not workspace.exists() or not runtime_path.exists():
+        return None
+
+    return {
+        "draft_id":draft_id,
+        "workspace":workspace,
+        "runtime_path":runtime_path,
+        "draft":draft,
+        "state":state,
+    }
+
+
 def latest_pending_team_run():
     pending_statuses={
         "等待人工验收",
@@ -402,6 +437,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     </div>
     <button onclick="refreshAcceptance()">刷新验收信息</button>
     <button onclick="runAcceptanceTests()" style="background:#166534;margin-left:8px">运行基础测试</button>
+    <button id="publishPendingBtn" onclick="publishPendingFromAcceptance()" style="background:#0f766e;margin-left:8px;display:none">发布待验收版本</button>
     <button id="launchProjectBtn" onclick="launchAcceptedProject()" style="background:#2563eb;margin-left:8px">启动工作台</button>
     <button id="openProjectBtn" onclick="openAcceptedProject()" style="background:#7c3aed;margin-left:8px;display:none">打开工作台</button>
     <button id="stopProjectBtn" onclick="stopAcceptedProject()" style="background:#6b7280;margin-left:8px;display:none">停止工作台</button>
@@ -722,8 +758,12 @@ async function refreshAcceptance(){
   }else{
     hint.innerHTML='当前只检测到技术入口 <b>'+escapeHtml(r.entry||'无')+'</b>，'
       +'还没有 docs/runtime.json 用户运行说明。<br>'
-      +'这意味着“代码可运行”不等于“你已经能直接使用这个功能”。';
+      +(r.pending_candidate_available
+        ? '<b>检测到隔离工作区里已有待验收版本，请点击“发布待验收版本”。</b>'
+        : '这意味着“代码可运行”不等于“你已经能直接使用这个功能”。');
   }
+  const publishBtn=document.getElementById('publishPendingBtn');
+  if(publishBtn)publishBtn.style.display=r.pending_candidate_available?'inline-block':'none';
   updateProjectRunButtons(r.runtime_status||{});
 }
 
@@ -733,6 +773,23 @@ function updateProjectRunButtons(s){
   document.getElementById('launchProjectBtn').disabled=running||!ACCEPTANCE_RUNTIME_READY;
   document.getElementById('stopProjectBtn').style.display=running?'inline-block':'none';
   document.getElementById('openProjectBtn').style.display=(running&&s.url)?'inline-block':'none';
+}
+
+async function publishPendingFromAcceptance(){
+  const btn=document.getElementById('publishPendingBtn');
+  btn.disabled=true;
+  btn.textContent='发布中...';
+  const r=await api('/api/project/acceptance/publish-pending',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  btn.disabled=false;
+  btn.textContent='发布待验收版本';
+  if(!r.ok){
+    alert(r.error||'发布失败');
+    return;
+  }
+  alert('待验收版本已发布到真实项目。现在刷新后应能看到用户入口。');
+  await refreshAcceptance();
 }
 
 async function launchAcceptedProject(){
@@ -1414,6 +1471,7 @@ class Handler(BaseHTTPRequestHandler):
                 "url":PROJECT_APP.get("url","") if running else "",
             }
 
+            pending_candidate=latest_publishable_candidate()
             self._json({
                 "ok":True,
                 "project":config.get("name") or project.name,
@@ -1425,6 +1483,8 @@ class Handler(BaseHTTPRequestHandler):
                 "runtime_status":runtime_status,
                 "allowed_paths":allowed,
                 "mode":config.get("mode"),
+                "pending_candidate_available":bool(pending_candidate),
+                "pending_candidate_draft_id":pending_candidate["draft_id"] if pending_candidate else "",
             })
             return
 
@@ -1595,6 +1655,47 @@ class Handler(BaseHTTPRequestHandler):
             }
             save_project_connection(config)
             self._json({"ok":True,"config":config})
+            return
+
+        if self.path=="/api/project/acceptance/publish-pending":
+            config=load_project_connection()
+            if not config.get("connected") or not config.get("validated"):
+                self._json({"ok":False,"error":"尚未连接真实项目"},400)
+                return
+            candidate=latest_publishable_candidate()
+            if not candidate:
+                self._json({"ok":False,"error":"没有找到可发布的待验收版本"},404)
+                return
+            draft=candidate["draft"]
+            project_cfg=draft.get("project_connection_snapshot") or {}
+            real_project=Path(project_cfg.get("path") or config.get("path"))
+            allowed=project_cfg.get("allowed_paths") or config.get("allowed_paths") or []
+            try:
+                from team_executor import sync_allowed_paths
+                synced=sync_allowed_paths(candidate["workspace"],real_project,allowed)
+
+                state=candidate["state"]
+                state["status"]="等待人工验收"
+                state["pending_human_acceptance"]=True
+                state["candidate_synced"]=True
+                state.setdefault("timeline",[]).append({
+                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "agent":"权限控制器",
+                    "action":"从项目验收中心发布待验收版本",
+                    "detail":{"synced_paths":synced}
+                })
+                state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/candidate["draft_id"]/"state.json"
+                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                with LOCK:
+                    TEAM_RUNS[candidate["draft_id"]]={"running":False,"state":state}
+
+                self._json({
+                    "ok":True,
+                    "draft_id":candidate["draft_id"],
+                    "synced_paths":synced
+                })
+            except Exception as exc:
+                self._json({"ok":False,"error":str(exc)},500)
             return
 
         if self.path=="/api/project/acceptance/launch":
