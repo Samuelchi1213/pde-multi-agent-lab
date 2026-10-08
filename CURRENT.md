@@ -911,3 +911,10 @@ UI 修复：
 - 兼容 entrypoint/script/main、local_url/address 等常见字段别名
 - 后端真实补上 no-cache 响应头
 - 只有文件确实不存在时才显示“发布待验收版本”
+
+
+## 2026-10-08｜修复 PowerShell 工作台入口不兼容
+- runtime.json entry = src/start_workbench.ps1；旧启动器只支持 .py，导致验收无法开始。
+- 现在读取/启动统一校验，支持授权目录内 .py/.ps1。优先使用 src/web_server.py 直接运行 Web 服务（如存在）。
+- 不解析或执行 manifest 的 start_command 字符串；启动前检查 localhost 端口是否占用。
+- 仍需在用户 Windows 电脑上实际验证。
