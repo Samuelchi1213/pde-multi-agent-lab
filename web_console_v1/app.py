@@ -1107,7 +1107,11 @@ async function pollValidation(kind){
   const d=await api('/api/team/status?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID));
   if(!d.ok)return;
   const s=d.state||{};
-  document.getElementById('teamStatus').textContent=s.status||'准备中';
+  const ago=Number(d.last_progress_seconds);
+  const progressNote=(d.running && Number.isFinite(ago) && ago>=300)
+    ? '（已 '+Math.floor(ago/60)+' 分钟无新记录，可能在等待模型或卡住；勿重复启动）'
+    : '';
+  document.getElementById('teamStatus').textContent=(s.status||'准备中')+progressNote;
   document.getElementById('currentAgent').textContent=s.current_agent||'-';
   document.getElementById('teamCodex').textContent=s.codex_calls||0;
   document.getElementById('teamRework').textContent=(s.rework_count||0)+' / '+(s.max_reworks||2);
@@ -1343,8 +1347,19 @@ async function declineBudget(){
 
 async function pollTeam(){
   if(!CURRENT_DRAFT_ID)return;
-  const d=await api('/api/team/status?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID));
-  if(!d.ok)return;
+  let d;
+  try{
+    d=await api('/api/team/status?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID)+'&t='+Date.now());
+  }catch(e){
+    document.getElementById('executeBadge').textContent='状态查询暂时失败，2秒后重试';
+    setTimeout(pollTeam,2000);
+    return;
+  }
+  if(!d.ok){
+    document.getElementById('executeBadge').textContent='状态获取失败，2秒后重试';
+    setTimeout(pollTeam,2000);
+    return;
+  }
   const s=d.state||{};
   document.getElementById('teamCard').style.display='block';
   document.getElementById('teamStatus').textContent=s.status||'准备中';
@@ -1395,7 +1410,10 @@ async function pollTeam(){
     ask.style.display='none';
   }
   document.getElementById('roleUsage').textContent=JSON.stringify(s.role_usage||{},null,2);
-  document.getElementById('teamTimeline').textContent=JSON.stringify(s.timeline||[],null,2);
+  document.getElementById('teamTimeline').textContent=
+    (s.diagnostic_note?'任务诊断：'+s.diagnostic_note+'\n\n':'')
+    +(s.error?'执行错误：'+s.error+'\n\n':'')
+    +JSON.stringify(s.timeline||[],null,2);
   const safety=document.getElementById('teamSafety');
   if(safety){
     if(s.real_project){
@@ -1410,7 +1428,9 @@ async function pollTeam(){
 
   const running=d.running;
   document.getElementById('executeBtn').disabled=!!running;
-  document.getElementById('executeBadge').textContent=running?'执行中':(s.status||'已结束');
+  document.getElementById('executeBadge').textContent=running
+    ?(Number(d.last_progress_seconds)>=300?'后台仍在运行，超过5分钟无进展':'后台执行中')
+    :(s.status||'已结束');
   if(running)setTimeout(pollTeam,2000);
 }
 
@@ -1684,8 +1704,37 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     disk_state={}
 
-            state=disk_state or memory_state
-            self._json({"ok":True,"running":running,"state":state})
+            # worker 的失败结果可能只进入内存；此前磁盘旧“执行中”会盖住错误。
+            # 只要后台线程已经退出，必须优先显示终态，而不是旧的磁盘进度。
+            terminal_statuses={
+                "执行失败","验证失败","已完成","等待人工验收",
+                "等待人工决策","等待预算确认","需要人工返工",
+                "已取消","已中止"
+            }
+            memory_status=memory_state.get("status","")
+            if not running and memory_status in terminal_statuses:
+                state=memory_state
+            else:
+                state=disk_state or memory_state
+
+            # 控制台重启后，旧任务不能假装仍然在运行。
+            if not running and state.get("status") in {"执行中","准备中","自动返工中"}:
+                state=dict(state)
+                state["status"]="执行中断（需要检查）"
+                state["current_agent"]=""
+                state["diagnostic_note"]="后台执行线程已不存在，但上次落盘状态尚无最终结论。现有隔离工作区已保留，请勿直接重复启动同一草案。"
+
+            age_seconds=None
+            if state_path.exists():
+                try:
+                    age_seconds=max(0,int(time.time()-state_path.stat().st_mtime))
+                except OSError:
+                    pass
+            self._json({
+                "ok":True,"running":running,"state":state,
+                "last_progress_seconds":age_seconds,
+                "state_source":"memory_final" if (not running and memory_status in terminal_statuses) else "disk",
+            })
             return
 
         self.send_error(404)
@@ -2571,11 +2620,25 @@ class Handler(BaseHTTPRequestHandler):
                         runner.save()
                         state=runner.state
                     else:
-                        state={
-                            "status":"执行失败",
-                            "current_agent":"",
-                            "timeline":[{"agent":"系统","action":"执行失败","detail":str(exc)}]
-                        }
+                        if runner is not None:
+                            # 保留已完成的角色、token、Codex 交付和测试日志。
+                            runner.state["status"]="执行失败"
+                            runner.state["current_agent"]=""
+                            runner.state["error"]=str(exc)
+                            try:
+                                runner.event("系统","执行失败，请检查异常并保留现有候选代码",str(exc))
+                                runner.state["current_agent"]=""
+                                runner.save()
+                            except Exception:
+                                pass
+                            state=runner.state
+                        else:
+                            state={
+                                "status":"执行失败",
+                                "current_agent":"",
+                                "error":str(exc),
+                                "timeline":[{"agent":"系统","action":"执行失败","detail":str(exc)}]
+                            }
                     with LOCK:
                         TEAM_RUNS[draft_id]={"running":False,"state":state}
 
