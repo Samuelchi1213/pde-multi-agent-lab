@@ -1014,3 +1014,11 @@ UI 修复：
 - 完整测试与本机验收步骤：[docs/PDE_M7_002_TASK_STATE_RELIABILITY.md](docs/PDE_M7_002_TASK_STATE_RELIABILITY.md)。
 - **状态：已提交待 Windows 本机验收。** 此阶段只如实标示中断；按步骤恢复付费模型执行另列为 M7-003，不能宣称已解决。
 - 不修改真实辅导员工作台的程序、数据或已验收结果。
+
+
+## 2026-10-08｜M7-002 本机离线验证通过，M7-003 安全基础提交
+- 用户 Windows PDE 诊断页面显示离线任务状态自检：Ran 13 tests / OK / exit code 0；M7-002 的本机离线测试已通过，但关机/重启后历史恢复尚需单独实测。
+- M7-003 阶段 A 新增独立 `step_checkpoints.py` 与 `test_step_checkpoints.py`，实现预约、指纹 SHA256、回执完整性校验、冲突/不确定状态安全拒绝、跨进程独占锁以及不保存原始模型输入的摘要。
+- 在开发/诊断工具新增“验证步骤防重复（离线）”按钮；预计 18 项无付费测试。
+- 实施文档：[docs/PDE_M7_003_STEP_CHECKPOINTS.md](docs/PDE_M7_003_STEP_CHECKPOINTS.md)。
+- **真实模型调用流程尚未接入新检查点；不得将 M7-003 阶段 A 宣称为自动断点续跑。** 原辅导员工作台项目及用户数据均未修改。
