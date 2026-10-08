@@ -897,3 +897,17 @@ UI 修复：
 - 所有 JSON API 响应增加 Cache-Control: no-store/no-cache
 - 验收中心刷新请求增加时间戳 cache-buster
 - 发布成功后强制重新读取真实项目磁盘状态
+
+
+## 2026-10-08｜验收刷新与 runtime.json 识别诊断
+
+进一步确认：
+- 用户点击刷新后视觉上无变化，不应继续把它归因于“缓存”。
+- 真正需要区分：runtime.json 不存在 vs 文件存在但 schema 无法识别。
+
+修复：
+- 刷新按钮增加“刷新中 / 已刷新 HH:MM:SS / 刷新失败”状态
+- runtime.json 存在但无效时直接显示具体原因和当前 JSON 内容
+- 兼容 entrypoint/script/main、local_url/address 等常见字段别名
+- 后端真实补上 no-cache 响应头
+- 只有文件确实不存在时才显示“发布待验收版本”
