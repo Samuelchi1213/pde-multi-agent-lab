@@ -3147,10 +3147,7 @@ class Handler(BaseHTTPRequestHandler):
                             "write_real_project":False,
                         }
                     })
-                    ctx["state_path"].write_text(
-                        json.dumps(state,ensure_ascii=False,indent=2),
-                        encoding="utf-8"
-                    )
+                    atomic_write_json(ctx["state_path"],state)
                     TEAM_RUNS[draft_id]={"running":True,"state":state}
                 except (ValueError,OSError) as exc:
                     self._json({"ok":False,"error":str(exc)},409)
@@ -3170,10 +3167,7 @@ class Handler(BaseHTTPRequestHandler):
                     final["manual_rework_error"]=str(exc)
                     final["current_agent"]=""
                     try:
-                        ctx["state_path"].write_text(
-                            json.dumps(final,ensure_ascii=False,indent=2),
-                            encoding="utf-8"
-                        )
+                        atomic_write_json(ctx["state_path"],final)
                     except Exception:
                         pass
                 with LOCK:
@@ -3230,9 +3224,7 @@ class Handler(BaseHTTPRequestHandler):
                         ),
                         "detail":result,
                     })
-                    ctx["state_path"].write_text(
-                        json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8"
-                    )
+                    atomic_write_json(ctx["state_path"],state)
                     TEAM_RUNS[draft_id]={"running":False,"state":state}
                     self._json({
                         "ok":True,"status":"等待人工验收",
