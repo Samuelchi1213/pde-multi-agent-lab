@@ -1050,12 +1050,12 @@ async function refreshAcceptance(){
         +'尚未找到 docs/runtime.json。<br>'
         +'检查路径：'+escapeHtml(r.runtime_manifest_path||'')+'<br>'
         +(r.pending_candidate_available
-          ? '<b>检测到隔离工作区里已有待验收版本，请点击“发布待验收版本”。</b>'
+          ? '<b>检测到待验收候选，请返回团队任务区域使用“查看安全发布预览”及“确认安全发布”。</b>'
           : '这意味着“代码可运行”不等于“你已经能直接使用这个功能”。');
     }
 
     const publishBtn=document.getElementById('publishPendingBtn');
-    if(publishBtn)publishBtn.style.display=(!r.runtime_manifest_exists && r.pending_candidate_available)?'inline-block':'none';
+    if(publishBtn)publishBtn.style.display='none'; // Deprecated unsafe publish route
     updateProjectRunButtons(r.runtime_status||{});
 
     const now=new Date();
@@ -2570,72 +2570,14 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path=="/api/project/acceptance/publish-pending":
-            config=load_project_connection()
-            if not config.get("connected") or not config.get("validated"):
-                self._json({"ok":False,"error":"尚未连接真实项目"},400)
-                return
-            candidate=latest_publishable_candidate()
-            if not candidate:
-                self._json({"ok":False,"error":"没有找到可发布的待验收版本"},404)
-                return
-            draft=candidate["draft"]
-            project_cfg=draft.get("project_connection_snapshot") or {}
-            real_project=Path(project_cfg.get("path") or config.get("path"))
-            allowed=project_cfg.get("allowed_paths") or config.get("allowed_paths") or []
-            try:
-                from team_executor import sync_allowed_paths
-                synced=sync_allowed_paths(candidate["workspace"],real_project,allowed)
-
-                source_runtime=candidate["workspace"]/"docs"/"runtime.json"
-                target_runtime=real_project/"docs"/"runtime.json"
-                verified=target_runtime.exists()
-
-                if not verified:
-                    self._json({
-                        "ok":False,
-                        "error":"发布动作完成，但真实项目中仍未发现 docs/runtime.json。",
-                        "diagnostics":{
-                            "draft_id":candidate["draft_id"],
-                            "workspace":str(candidate["workspace"]),
-                            "source_runtime":str(source_runtime),
-                            "source_runtime_exists":source_runtime.exists(),
-                            "real_project":str(real_project),
-                            "target_runtime":str(target_runtime),
-                            "target_runtime_exists":target_runtime.exists(),
-                            "allowed_paths":allowed,
-                            "synced_paths":synced,
-                        }
-                    },500)
-                    return
-
-                state=candidate["state"]
-                state["status"]="等待人工验收"
-                state["pending_human_acceptance"]=True
-                state["candidate_synced"]=True
-                state.setdefault("timeline",[]).append({
-                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "agent":"权限控制器",
-                    "action":"从项目验收中心发布待验收版本",
-                    "detail":{
-                        "synced_paths":synced,
-                        "runtime_verified":True,
-                        "target_runtime":str(target_runtime)
-                    }
-                })
-                state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/candidate["draft_id"]/"state.json"
-                atomic_write_json(state_path,state)
-                with LOCK:
-                    TEAM_RUNS[candidate["draft_id"]]={"running":False,"state":state}
-
-                self._json({
-                    "ok":True,
-                    "draft_id":candidate["draft_id"],
-                    "synced_paths":synced,
-                    "runtime_verified":True,
-                    "target_runtime":str(target_runtime)
-                })
-            except Exception as exc:
-                self._json({"ok":False,"error":str(exc)},500)
+            # Legacy whole-directory sync removed. Never delete src/data or overwrite
+            # the user's business files from a staging folder.
+            self._json({
+                "ok":False,
+                "error":"旧版“发布待验收版本”入口已停用，防止覆盖原学生数据。"
+                        "请返回团队任务，先查看安全发布差异预览，再点击确认安全发布。",
+                "safe_publish_required":True,
+            },409)
             return
 
         if self.path=="/api/project/acceptance/launch":
