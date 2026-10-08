@@ -291,6 +291,8 @@ def latest_resumable_team_run():
         "等待人工验收","等待人工决策","等待预算确认",
         "需要人工返工","准备继续",
         "执行失败","验证失败","执行中断（需要检查）",
+        "测试复核恢复中","复核通过（待安全发布）",
+        "复核发现需返工","复核等待负责人决定","复核失败（保留成果）",
     }
     candidates=[]
     for draft_id,info in TEAM_RUNS.items():
@@ -654,6 +656,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       当前安全范围：等待任务启动。
     </div>
     <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button><button id="inspectInterruptedBtn" style="display:none" onclick="inspectInterruptedTask()">诊断本次中断（只读）</button>
+    <button id="resumeQaOnlyBtn" style="display:none;background:#166534" onclick="resumeQaOnly()">仅恢复测试复核（需授权 DeepSeek）</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
     <div id="budgetAsk" class="card human" style="display:none;margin-top:14px">
       <h4>需要追加少量预算</h4>
@@ -1417,11 +1420,55 @@ async function inspectInterruptedTask(){
       '测试摘要：\n'+(r.test_summary||'无')
     ].join('\n');
     document.getElementById('teamTimeline').textContent=report;
+    const qaBtn=document.getElementById('resumeQaOnlyBtn');
+    if(qaBtn)qaBtn.style.display=r.qa_resume_eligible?'inline-block':'none';
     alert(r.safe_next_step);
   }catch(e){
     document.getElementById('teamTimeline').textContent='中断诊断失败：'+String(e);
   }finally{
     if(b){b.disabled=false;b.textContent='诊断本次中断（只读）';}
+  }
+}
+
+async function resumeQaOnly(){
+  if(!CURRENT_DRAFT_ID){alert('没有当前任务 ID');return;}
+  let chk;
+  try{
+    chk=await api('/api/team/recovery/inspect?draft_id='
+      +encodeURIComponent(CURRENT_DRAFT_ID)+'&t='+Date.now());
+  }catch(e){alert('无法核对恢复条件：'+String(e));return;}
+  if(!chk.ok||!chk.qa_resume_eligible){
+    alert(chk.error||'目前不符合单独 QA 复核恢复条件。');
+    return;
+  }
+  if(!confirm(
+    '仅恢复测试智能体复核？\n\n'
+    +'任务：'+CURRENT_DRAFT_ID+'\n'
+    +'DeepSeek 已用：'+chk.deepseek_tokens+' tokens\n'
+    +'调整后的总预算：'+chk.qa_budget_ceiling+' tokens\n'
+    +'预算余量：'+chk.qa_budget_remaining+' tokens\n\n'
+    +'同意新增一次付费 DeepSeek API 调用（单次实际消耗可能超过预算余量）。\n'
+    +'不会重复运行 Codex，不会重新创建隔离工作区，也不会发布真实项目。'
+  ))return;
+  const btn=document.getElementById('resumeQaOnlyBtn');
+  btn.disabled=true;
+  btn.textContent='正在单独复核...';
+  try{
+    const d=await api('/api/team/recovery/qa-only',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        draft_id:CURRENT_DRAFT_ID,
+        approve_single_deepseek_call:true
+      })
+    });
+    if(!d.ok)throw Error(d.error||'仅 QA 复核启动失败');
+    btn.style.display='none';
+    pollTeam();
+  }catch(e){
+    btn.disabled=false;
+    btn.textContent='仅恢复测试复核（需授权 DeepSeek）';
+    alert(String(e));
   }
 }
 
@@ -1512,7 +1559,10 @@ async function pollTeam(){
   );
   const recoveryBtn=document.getElementById('inspectInterruptedBtn');
   if(recoveryBtn)recoveryBtn.style.display=interrupted?'inline-block':'none';
-  document.getElementById('executeBtn').disabled=!!running || interrupted;
+  const qaBtn=document.getElementById('resumeQaOnlyBtn');
+  if(qaBtn && (running || !interrupted))qaBtn.style.display='none';
+  document.getElementById('executeBtn').disabled=!!running || interrupted
+    || ['复核通过（待安全发布）','复核发现需返工','复核等待负责人决定','复核失败（保留成果）'].includes(s.status);
   document.getElementById('executeBadge').textContent=running
     ?(Number(d.last_progress_seconds)>=300?'后台仍在运行，超过5分钟无进展':'后台执行中')
     :(s.status||'已结束');
@@ -1806,6 +1856,14 @@ class Handler(BaseHTTPRequestHandler):
             budget=int(state.get("deepseek_token_budget") or 16000)
             qacost=int((state.get("role_usage") or {}).get("测试智能体") or 0)
             latest=events[-1] if events else {}
+            from qa_recovery import historical_tests
+            eligible=(
+                not running and workspace.is_dir() and codex_file.is_file()
+                and not qa_file.is_file() and test_exit==0
+                and int(state.get("codex_calls") or 0)>0
+                and not state.get("qa_resume_attempted",False)
+                and state.get("status") in {"执行中","执行中断（需要检查）","执行失败"}
+            )
             result={
                 "ok":True,"draft_id":draft_id,"running":running,
                 "saved_status":state.get("status"),
@@ -1822,6 +1880,9 @@ class Handler(BaseHTTPRequestHandler):
                 "token_budget":budget,
                 "qa_role_tokens":qacost,
                 "budget_exceeded":tokens>budget,
+                "qa_resume_eligible":eligible,
+                "qa_budget_ceiling":30000,
+                "qa_budget_remaining":max(0,30000-tokens),
                 "last_event":{
                     "time":latest.get("time"),
                     "agent":latest.get("agent"),
@@ -2724,6 +2785,79 @@ class Handler(BaseHTTPRequestHandler):
                         }}
             threading.Thread(target=resume_worker,daemon=True).start()
             self._json({"ok":True,"new_budget":approved})
+            return
+
+        if self.path=="/api/team/recovery/qa-only":
+            draft_id=str(data.get("draft_id") or "").strip()
+            if data.get("approve_single_deepseek_call") is not True:
+                self._json({"ok":False,"error":"必须明确授权本次单独复核费用"},400)
+                return
+            draft=ANALYSES.get(draft_id)
+            if not draft or not draft.get("confirmed"):
+                self._json({"ok":False,"error":"没有可恢复的已确认草案"},404)
+                return
+            key=get_deepseek_key()
+            if not key:
+                self._json({"ok":False,"error":"尚未配置 DeepSeek API Key"},400)
+                return
+            from qa_recovery import historical_tests,recover_once
+            run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
+            state_path=run_dir/"state.json"
+            workspace=run_dir/"workspace"
+            delivery_file=run_dir/"codex_delivery.json"
+            qa_file=run_dir/"artifacts"/"qa_review.json"
+            if not (state_path.is_file() and workspace.is_dir() and delivery_file.is_file()):
+                self._json({"ok":False,"error":"原隔离工作区或交付证据缺失"},409)
+                return
+            try:
+                state=json.loads(state_path.read_text(encoding="utf-8"))
+                json.loads(delivery_file.read_text(encoding="utf-8"))
+            except (ValueError,OSError) as exc:
+                self._json({"ok":False,"error":"原始证据损坏："+str(exc)},409)
+                return
+            ev=historical_tests(state)
+            if not isinstance(ev,dict) or ev.get("returncode")!=0:
+                self._json({"ok":False,"error":"未发现通过的原自动测试记录"},409)
+                return
+            if int(state.get("deepseek_tokens") or 0)>=30000:
+                self._json({"ok":False,"error":"已达到 30000 tokens 上限，不能发起新的付费调用"},409)
+                return
+            with LOCK:
+                if TEAM_RUNS.get(draft_id,{}).get("running"):
+                    self._json({"ok":False,"error":"已有同任务后台执行"},409)
+                    return
+                if qa_file.exists() or state.get("qa_resume_attempted"):
+                    self._json({"ok":False,"error":"复核已尝试或 QA 报告已存在，防止重复付费"},409)
+                    return
+                if state.get("status") not in {"执行中","执行中断（需要检查）","执行失败"}:
+                    self._json({"ok":False,"error":"状态不属于可恢复的中断任务"},409)
+                    return
+                # 在启动线程前写入防重和授权证据。
+                state["qa_resume_attempted"]=True
+                state["qa_resume_authorized"]=True
+                state["deepseek_token_budget"]=30000
+                state["status"]="测试复核恢复中"
+                state["current_agent"]="测试智能体"
+                state.setdefault("timeline",[]).append({
+                    "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "agent":"项目负责人","action":"授权仅测试智能体单次复核",
+                    "detail":{
+                        "tokens_before":int(state.get("deepseek_tokens") or 0),
+                        "budget_after":30000,"allow_more_than_one_call":False
+                    }
+                })
+                state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+                TEAM_RUNS[draft_id]={"running":True,"state":state}
+
+            def qa_worker():
+                final=recover_once(ROOT,draft_id,draft,key,state)
+                with LOCK:
+                    TEAM_RUNS[draft_id]={"running":False,"state":final}
+            threading.Thread(target=qa_worker,daemon=True).start()
+            self._json({
+                "ok":True,"draft_id":draft_id,"status":"测试复核恢复中",
+                "note":"仅使用历史 Codex 交付与测试证据，未修改项目源文件。"
+            })
             return
 
         if self.path=="/api/team/start":
