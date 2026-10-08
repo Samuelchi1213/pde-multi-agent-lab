@@ -2882,6 +2882,62 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True,"new_budget":approved})
             return
 
+        if self.path=="/api/team/safe-publish":
+            draft_id=str(data.get("draft_id") or "").strip()
+            revision=str(data.get("revision") or "").strip()
+            if data.get("confirmation")!="publish_reviewed_candidate":
+                self._json({"ok":False,"error":"必须明确确认刚才预览过的安全发布"},400)
+                return
+            if len(revision)!=64:
+                self._json({"ok":False,"error":"请先获取最新的文件差异预览"},400)
+                return
+            with LOCK:
+                if TEAM_RUNS.get(draft_id,{}).get("running"):
+                    self._json({"ok":False,"error":"任务仍有后台线程"},409)
+                    return
+                try:
+                    from safe_candidate_publish import apply_publish_plan
+                    ctx=safe_candidate_context(draft_id)
+                    proc=PROJECT_APP.get("process")
+                    if proc is not None and proc.poll() is None:
+                        self._json({
+                            "ok":False,
+                            "error":"现有工作台正在运行，请先在项目验收中心停止工作台再发布。"
+                        },409)
+                        return
+                    backups=ROOT/"orchestrator_v1"/"runtime"/"safe_publish_backups"
+                    result=apply_publish_plan(
+                        ctx["workspace"],ctx["project"],ctx["allowed"],
+                        revision,backups,draft_id
+                    )
+                    state=ctx["state"]
+                    state["candidate_synced"]=True
+                    state["pending_human_acceptance"]=True
+                    state["status"]="等待人工验收"
+                    state["current_agent"]=""
+                    state["safe_publish_backup"]=result["backup_path"]
+                    state.setdefault("timeline",[]).append({
+                        "time":time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "agent":"权限控制器","action":"QA 通过后安全发布待人工验收版本",
+                        "detail":result,
+                    })
+                    ctx["state_path"].write_text(
+                        json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8"
+                    )
+                    TEAM_RUNS[draft_id]={"running":False,"state":state}
+                    self._json({
+                        "ok":True,"status":"等待人工验收",
+                        "backup_path":result["backup_path"],
+                        "changed_files":result["files_changed"],
+                        "skipped_data":result["skipped_data_files"],
+                        "changed_paths":result["changed_paths"],
+                    })
+                except (ValueError,OSError) as exc:
+                    self._json({"ok":False,"error":str(exc)},409)
+                except Exception as exc:
+                    self._json({"ok":False,"error":"安全发布失败："+str(exc)},500)
+            return
+
         if self.path=="/api/team/recovery/qa-only":
             draft_id=str(data.get("draft_id") or "").strip()
             if data.get("approve_single_deepseek_call") is not True:
