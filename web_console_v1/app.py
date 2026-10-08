@@ -337,6 +337,48 @@ def latest_resumable_team_run():
     return {"draft_id":draft_id,"state":state,"running":live}
 
 
+def manual_rework_context(draft_id):
+    """Read-only validation for an explicitly rejected published task."""
+    from team_executor import codex_path
+    from manual_rework import last_rejection
+    draft=ANALYSES.get(draft_id)
+    if not draft or not draft.get("confirmed") or not draft.get("use_real_project"):
+        raise ValueError("未找到已确认的真实项目任务")
+    current=load_project_connection()
+    snap=draft.get("project_connection_snapshot") or {}
+    if not current.get("connected") or not current.get("validated"):
+        raise ValueError("真实项目未连接或未验证")
+    if current.get("mode")!="scoped_write" or snap.get("mode")!="scoped_write":
+        raise ValueError("原任务或当前连接未授权 scoped_write")
+    project=Path(current.get("path") or "").resolve()
+    if project!=Path(snap.get("path") or "").resolve():
+        raise ValueError("原任务项目与当前项目不一致")
+    allowed=sorted(current.get("allowed_paths") or [])
+    if allowed!=sorted(snap.get("allowed_paths") or []) or not all(
+        x in {"src","tests","docs"} for x in allowed
+    ):
+        raise ValueError("原任务与当前授权范围不一致")
+    state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+    if not state_path.is_file():
+        raise ValueError("未找到该任务的保存状态")
+    state=json.loads(state_path.read_text(encoding="utf-8"))
+    if state.get("status")!="需要人工返工":
+        raise ValueError("只有明确被项目负责人退回的任务才能定向返工")
+    if state.get("manual_rework_attempted"):
+        raise ValueError("当前任务已经尝试过定向返工，不会自动重复执行")
+    note=last_rejection(state)
+    if not note:
+        raise ValueError("未找到人工验收退回理由")
+    if not codex_path():
+        raise ValueError("当前电脑尚未检测到 Codex CLI")
+    if not project.is_dir():
+        raise ValueError("原真实项目文件夹不存在")
+    return {
+        "draft":draft,"state":state,"state_path":state_path,
+        "project":project,"allowed":allowed,"note":note,
+    }
+
+
 def safe_candidate_context(draft_id):
     """Validate independent QA, connected project, test evidence, and permissions."""
     draft=ANALYSES.get(draft_id)
