@@ -71,6 +71,20 @@ class TestAtomicRunState(unittest.TestCase):
         self.assertEqual(result["state"]["error"], "模型超时")
         self.assertEqual(result["state_source"], "memory_final")
 
+    def test_stopped_thread_overrides_stale_running_flag(self):
+        class FinishedWorker:
+            def is_alive(self):
+                return False
+
+        atomic_write_json(self.path, {"status": "执行中", "codex_calls": 1})
+        result = project_team_status(self.path, {
+            "running": True,
+            "thread": FinishedWorker(),
+            "state": {"status": "执行中"},
+        })
+        self.assertFalse(result["running"])
+        self.assertEqual(result["state"]["status"], "执行中断（需要检查）")
+
     def test_pending_budget_requires_approval_not_interruption(self):
         atomic_write_json(self.path, {"status": "等待预算确认", "deepseek_tokens": 29556})
         result = project_team_status(self.path, {"running": False})
