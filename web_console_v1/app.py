@@ -653,7 +653,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <div id="teamSafety" style="margin-top:14px;padding:10px;background:#fff7ed;border-radius:8px">
       当前安全范围：等待任务启动。
     </div>
-    <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button>
+    <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button><button id="inspectInterruptedBtn" style="display:none" onclick="inspectInterruptedTask()">诊断本次中断（只读）</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
     <div id="budgetAsk" class="card human" style="display:none;margin-top:14px">
       <h4>需要追加少量预算</h4>
@@ -1394,6 +1394,37 @@ async function declineBudget(){
   pollTeam();
 }
 
+async function inspectInterruptedTask(){
+  if(!CURRENT_DRAFT_ID){alert('尚未定位到团队任务');return;}
+  const b=document.getElementById('inspectInterruptedBtn');
+  if(b){b.disabled=true;b.textContent='正在只读检查...';}
+  try{
+    const q='/api/team/recovery/inspect?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID)+'&t='+Date.now();
+    const r=await api(q);
+    if(!r.ok)throw Error(r.error||'检查失败');
+    const report=[
+      '任务：'+r.draft_id,
+      '后台仍在运行：'+r.running,
+      '磁盘状态：'+r.saved_status,
+      '隔离工作区存在：'+r.workspace_exists,
+      'Codex 交付文件存在：'+r.codex_delivery_exists,
+      'QA 复核结论文件存在：'+r.qa_review_exists,
+      '自动测试退出码：'+r.test_returncode+'（0 为成功）',
+      'DeepSeek tokens / 预算：'+r.deepseek_tokens+' / '+r.token_budget,
+      '测试智能体 tokens：'+r.qa_role_tokens,
+      '最后事件：'+(r.last_event?.action||'无'),
+      '诊断：'+r.safe_next_step,
+      '测试摘要：\n'+(r.test_summary||'无')
+    ].join('\n');
+    document.getElementById('teamTimeline').textContent=report;
+    alert(r.safe_next_step);
+  }catch(e){
+    document.getElementById('teamTimeline').textContent='中断诊断失败：'+String(e);
+  }finally{
+    if(b){b.disabled=false;b.textContent='诊断本次中断（只读）';}
+  }
+}
+
 async function pollTeam(){
   if(!CURRENT_DRAFT_ID)return;
   let d;
@@ -1476,7 +1507,12 @@ async function pollTeam(){
   }
 
   const running=d.running;
-  document.getElementById('executeBtn').disabled=!!running;
+  const interrupted=!running && (
+    ['执行中','准备中','自动返工中','执行中断（需要检查）','执行失败','验证失败'].includes(s.status)
+  );
+  const recoveryBtn=document.getElementById('inspectInterruptedBtn');
+  if(recoveryBtn)recoveryBtn.style.display=interrupted?'inline-block':'none';
+  document.getElementById('executeBtn').disabled=!!running || interrupted;
   document.getElementById('executeBadge').textContent=running
     ?(Number(d.last_progress_seconds)>=300?'后台仍在运行，超过5分钟无进展':'后台执行中')
     :(s.status||'已结束');
@@ -1733,6 +1769,75 @@ class Handler(BaseHTTPRequestHandler):
                 "human":read_json(cfg["human_file"]),
                 "run":run,
             })
+            return
+
+        if parsed.path=="/api/team/recovery/inspect":
+            q=parse_qs(parsed.query)
+            draft_id=q.get("draft_id",[""])[0].strip()
+            # 只允许访问已经由系统创建、管理的任务 ID。
+            if not draft_id or draft_id not in TEAM_RUNS:
+                self._json({"ok":False,"error":"没有找到此任务的保存记录"},404)
+                return
+            with LOCK:
+                meta=TEAM_RUNS.get(draft_id,{})
+                running=bool(meta.get("running"))
+            run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
+            state_path=run_dir/"state.json"
+            if not state_path.is_file():
+                self._json({"ok":False,"error":"没有找到保存的任务状态"},404)
+                return
+            try:
+                state=json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError,ValueError) as exc:
+                self._json({"ok":False,"error":f"任务状态文件读取失败：{exc}"},500)
+                return
+            events=state.get("timeline") or []
+            tests=next(
+                (event.get("detail") for event in reversed(events)
+                 if event.get("agent")=="系统验证器"
+                 and event.get("action")=="独立运行可发现测试"),
+                None
+            )
+            workspace=run_dir/"workspace"
+            qa_file=run_dir/"artifacts"/"qa_review.json"
+            codex_file=run_dir/"codex_delivery.json"
+            test_exit=tests.get("returncode") if isinstance(tests,dict) else None
+            tokens=int(state.get("deepseek_tokens") or 0)
+            budget=int(state.get("deepseek_token_budget") or 16000)
+            qacost=int((state.get("role_usage") or {}).get("测试智能体") or 0)
+            latest=events[-1] if events else {}
+            result={
+                "ok":True,"draft_id":draft_id,"running":running,
+                "saved_status":state.get("status"),
+                "workspace_exists":workspace.is_dir(),
+                "workspace":str(workspace),
+                "codex_delivery_exists":codex_file.is_file(),
+                "qa_review_exists":qa_file.is_file(),
+                "test_returncode":test_exit,
+                "test_summary":(
+                    ((tests.get("stdout") or "")+"\n"+(tests.get("stderr") or ""))[-700:]
+                    if isinstance(tests,dict) else "未找到历史独立测试证据"
+                ),
+                "deepseek_tokens":tokens,
+                "token_budget":budget,
+                "qa_role_tokens":qacost,
+                "budget_exceeded":tokens>budget,
+                "last_event":{
+                    "time":latest.get("time"),
+                    "agent":latest.get("agent"),
+                    "action":latest.get("action")
+                },
+                "safe_next_step":(
+                    "后台仍在运行：请保持当前任务，不要重新启动。"
+                    if running else
+                    "独立测试证据已通过且 QA 文件存在：先查看保存的 QA 结论。"
+                    if test_exit==0 and qa_file.is_file() else
+                    "候选工作区和自动测试通过记录存在，但没有保存的 QA 结论。需要单独恢复复核；请勿重跑整个开发任务。"
+                    if workspace.is_dir() and test_exit==0 else
+                    "请先核对隔离工作区和自动测试证据，不应直接发布或批准验收。"
+                )
+            }
+            self._json(result)
             return
 
         if parsed.path=="/api/team/status":
