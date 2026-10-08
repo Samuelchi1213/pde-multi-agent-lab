@@ -284,6 +284,73 @@ def latest_pending_team_run():
     return {"draft_id":draft_id,"state":state}
 
 
+def resolve_project_runtime(project, allowed):
+    """读取用户入口；不执行 runtime.json 的 start_command 字符串。"""
+    path=project/"docs"/"runtime.json"
+    if not path.is_file():
+        return None,"尚未找到 docs/runtime.json",None
+    try:
+        raw=json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        return None,f"runtime.json 无法解析：{exc}",None
+    if not isinstance(raw,dict):
+        return None,"runtime.json 必须是 JSON 对象",raw
+    rel=str(raw.get("entry") or raw.get("entrypoint") or raw.get("script") or raw.get("main") or "").strip().replace("\\","/")
+    url=str(raw.get("url") or raw.get("local_url") or raw.get("address") or "").strip()
+    kind=str(raw.get("type") or raw.get("mode") or raw.get("kind") or ("web" if url else "cli")).lower()
+    if not rel:
+        return None,"runtime.json 缺少 entry",raw
+    p=Path(rel)
+    if p.is_absolute() or ".." in p.parts or ":" in rel:
+        return None,"entry 必须是授权目录内的相对路径",raw
+    root=project.resolve()
+    entry_path=(root/p).resolve()
+    try:
+        entry_path.relative_to(root)
+    except ValueError:
+        return None,"entry 越出了真实项目目录",raw
+    allowed_roots=[str(x).strip().replace("\\","/").strip("/") for x in allowed]
+    if not any(rel==v or rel.startswith(v+"/") for v in allowed_roots if v):
+        return None,"entry 不在授权目录内",raw
+    if not entry_path.is_file():
+        return None,f"entry 文件不存在：{rel}",raw
+    if entry_path.suffix.lower() not in {".py",".ps1"}:
+        return None,"当前支持 Python .py 或 Windows PowerShell .ps1 入口",raw
+    if url:
+        try:
+            u=urlparse(url)
+            valid=(u.scheme=="http" and u.hostname in {"127.0.0.1","localhost"} and
+                   u.port is not None and not u.username and not u.password)
+        except ValueError:
+            valid=False
+        if not valid:
+            return None,"URL 必须是 http://127.0.0.1:端口 或 http://localhost:端口",raw
+    elif kind=="web":
+        return None,"Web 入口必须提供本地访问 URL",raw
+    launch_rel=rel
+    launcher="python" if entry_path.suffix.lower()==".py" else "powershell"
+    note=""
+    if launcher=="powershell" and kind=="web":
+        # 当前 Windows .ps1 只是启动包装器时，优先直接运行实际 Python Web 服务。
+        server=(root/"src"/"web_server.py").resolve()
+        try:
+            server.relative_to(root)
+            if server.is_file() and any(
+                "src/web_server.py"==v or "src/web_server.py".startswith(v+"/")
+                for v in allowed_roots if v
+            ):
+                launch_rel="src/web_server.py"
+                launcher="python"
+                note="检测到 PowerShell 启动包装器；改用现有 Python Web 服务直接启动。"
+        except ValueError:
+            pass
+    return {
+        "entry":rel,"launch_entry":launch_rel,"launcher":launcher,
+        "type":kind if kind in {"web","cli"} else ("web" if url else "cli"),
+        "url":url,"note":note,
+    },"",raw
+
+
 def read_json(relpath):
     path = ROOT / relpath
     if not path.exists():
@@ -767,6 +834,8 @@ async function refreshAcceptance(){
       hint.innerHTML='✅ 已识别用户入口：<b>'+escapeHtml(m.entry||'')+'</b>'
         +(m.type?'<br>类型：'+escapeHtml(m.type):'')
         +(m.url?'<br>地址：'+escapeHtml(m.url):'')
+        +(m.launch_entry&&m.launch_entry!==m.entry?'<br>实际启动：'+escapeHtml(m.launch_entry):'')
+        +(m.note?'<br>'+escapeHtml(m.note):'')
         +'<br>runtime.json：'+escapeHtml(r.runtime_manifest_path||'');
     }else if(r.runtime_manifest_exists){
       hint.innerHTML='⚠️ 已找到 docs/runtime.json，但当前格式无法作为用户入口使用。<br>'
@@ -1472,64 +1541,10 @@ class Handler(BaseHTTPRequestHandler):
                     break
 
             entry="src/main.py" if (project/"src"/"main.py").exists() else ""
-            runtime_manifest=None
-            runtime_manifest_error=""
-            runtime_manifest_raw=None
             manifest_path=project/"docs"/"runtime.json"
-            if manifest_path.exists():
-                try:
-                    runtime_manifest_raw=json.loads(manifest_path.read_text(encoding="utf-8"))
-                    raw=runtime_manifest_raw if isinstance(runtime_manifest_raw,dict) else {}
-
-                    manifest_entry=str(
-                        raw.get("entry")
-                        or raw.get("entrypoint")
-                        or raw.get("script")
-                        or raw.get("main")
-                        or ""
-                    ).strip().replace("\\","/")
-                    manifest_type=str(
-                        raw.get("type")
-                        or raw.get("mode")
-                        or raw.get("kind")
-                        or ""
-                    ).strip().lower()
-                    manifest_url=str(
-                        raw.get("url")
-                        or raw.get("local_url")
-                        or raw.get("address")
-                        or ""
-                    ).strip()
-
-                    problems=[]
-                    if not manifest_entry:
-                        problems.append("缺少 entry（也兼容 entrypoint/script/main）")
-                    elif Path(manifest_entry).is_absolute() or ".." in Path(manifest_entry).parts:
-                        problems.append("entry 必须是项目内相对路径")
-                    elif not any(
-                        manifest_entry==a or manifest_entry.startswith(a.rstrip("/")+"/")
-                        for a in allowed
-                    ):
-                        problems.append("entry 不在授权目录 src/tests/docs 内")
-                    elif not manifest_entry.lower().endswith(".py"):
-                        problems.append("当前启动器只允许 Python .py 入口")
-
-                    if manifest_url and not (
-                        manifest_url.startswith("http://127.0.0.1:")
-                        or manifest_url.startswith("http://localhost:")
-                    ):
-                        problems.append("url 只允许 localhost 或 127.0.0.1")
-
-                    if not problems:
-                        runtime_manifest={
-                            "entry":manifest_entry,
-                            "type":manifest_type if manifest_type in {"web","cli"} else ("web" if manifest_url else "cli"),
-                            "url":manifest_url,
-                        }
-                    else:
-                        runtime_manifest_error="；".join(problems)
-                except Exception as exc:
-                    runtime_manifest_error=f"runtime.json 不是有效 JSON：{exc}"
+            runtime_manifest,runtime_manifest_error,runtime_manifest_raw=resolve_project_runtime(
+                project,allowed
+            )
 
             proc=PROJECT_APP.get("process")
             running=bool(proc is not None and proc.poll() is None)
@@ -1813,35 +1828,39 @@ class Handler(BaseHTTPRequestHandler):
                 },400)
                 return
             try:
-                raw=json.loads(manifest_path.read_text(encoding="utf-8"))
-                rel=str(raw.get("entry") or "").strip().replace("\\","/")
-                kind=str(raw.get("type") or "cli").strip().lower()
-                url=str(raw.get("url") or "").strip()
-                allowed=config.get("allowed_paths",[])
-                if (
-                    not rel
-                    or Path(rel).is_absolute()
-                    or ".." in Path(rel).parts
-                    or not any(rel==a or rel.startswith(a.rstrip("/")+"/") for a in allowed)
-                    or not rel.lower().endswith(".py")
-                ):
-                    self._json({"ok":False,"error":"runtime.json 的 entry 不在授权目录内或不是 Python 文件"},400)
+                runtime,runtime_error,_=resolve_project_runtime(
+                    project,config.get("allowed_paths",[])
+                )
+                if not runtime:
+                    self._json({"ok":False,"error":runtime_error},400)
                     return
-                entry_path=project/rel
-                if not entry_path.exists():
-                    self._json({"ok":False,"error":"runtime.json 指定的入口文件不存在"},400)
-                    return
-                if url and not (
-                    url.startswith("http://127.0.0.1:")
-                    or url.startswith("http://localhost:")
-                ):
-                    self._json({"ok":False,"error":"只允许打开本机 localhost 地址"},400)
+                rel=runtime["entry"]
+                kind=runtime["type"]
+                url=runtime["url"]
+                launcher=runtime["launcher"]
+                launch_rel=runtime["launch_entry"]
+                launch_path=(project/launch_rel).resolve()
+                if launcher=="powershell" and os.name!="nt":
+                    self._json({"ok":False,"error":"PowerShell 入口仅支持 Windows"},400)
                     return
 
                 old=PROJECT_APP.get("process")
                 if old is not None and old.poll() is None:
                     self._json({"ok":False,"error":"工作台已经在运行"},409)
                     return
+
+                if kind=="web" and url:
+                    import socket
+                    port=urlparse(url).port
+                    with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as sock:
+                        sock.settimeout(0.4)
+                        if sock.connect_ex(("127.0.0.1",port))==0:
+                            self._json({
+                                "ok":False,
+                                "error":f"本机 {port} 端口已经被占用，不能安全启动工作台。请让开发智能体更改工作台端口，并更新 docs/runtime.json。",
+                                "log":f"地址：{url}；未启动新进程，也未关闭原有程序。"
+                            },409)
+                            return
 
                 creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if os.name=="nt" else 0
                 log_dir=ROOT/"orchestrator_v1"/"runtime"/"project_app"
@@ -1856,9 +1875,20 @@ class Handler(BaseHTTPRequestHandler):
                     [p for p in [src_dir,project_dir,existing] if p]
                 )
 
+                if launcher=="python":
+                    argv=[sys.executable,"-u",str(launch_path)]
+                else:
+                    powershell=shutil.which("powershell.exe")
+                    if not powershell:
+                        self._json({"ok":False,"error":"未检测到 Windows PowerShell"},400)
+                        return
+                    argv=[
+                        powershell,"-NoLogo","-NoProfile","-NonInteractive",
+                        "-ExecutionPolicy","RemoteSigned","-File",str(launch_path)
+                    ]
                 log_handle=open(log_file,"w",encoding="utf-8",errors="replace")
                 proc=subprocess.Popen(
-                    [sys.executable,str(entry_path)],
+                    argv,
                     cwd=project,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
@@ -1928,6 +1958,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({
                     "ok":True,
                     "status":{"running":True,"entry":rel,"url":PROJECT_APP.get("url","")},
+                    "actual_launch_entry":launch_rel,
                     "log":log_text or "工作台进程已启动并通过本地访问检查。"
                 })
             except Exception as exc:
