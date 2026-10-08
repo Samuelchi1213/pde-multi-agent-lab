@@ -711,6 +711,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <button id="taskStateTestBtn" onclick="checkTaskStateRegression()" style="background:#334155;margin-left:8px">验证任务状态恢复（离线）</button>
     <button id="checkpointTestBtn" onclick="checkStepCheckpointRegression()" style="background:#475569;margin-left:8px">验证步骤防重复（离线）</button>
     <button id="modelGuardTestBtn" onclick="checkModelCallGuardRegression()" style="background:#0369a1;margin-left:8px">验证模型调用防重复（模拟）</button>
+    <button id="fullReliabilityTestBtn" onclick="checkFullReliabilitySuite()" style="background:#0f766e;margin-left:8px">一键综合验收（全部离线）</button>
     <span id="validationBadge" class="badge">尚未验证</span>
     <pre id="validationResult" style="display:none;margin-top:12px"></pre>
 
@@ -1777,6 +1778,32 @@ async function confirmSafePublish(){
   }
 }
 
+async function checkFullReliabilitySuite(){
+  const btn=document.getElementById('fullReliabilityTestBtn');
+  const output=document.getElementById('validationResult');
+  const badge=document.getElementById('validationBadge');
+  btn.disabled=true;
+  output.style.display='block';
+  output.textContent='正在检查任务状态、步骤防重复、DeepSeek 模拟调用和 Codex 模拟调用。\n全部在临时目录进行，不消耗模型额度，也不修改真实项目...';
+  badge.textContent='综合自检中';
+  try{
+    const r=await api('/api/diagnostics/m7/full-suite?t='+Date.now());
+    if(!r.ok)throw Error(r.error||'无法启动离线自检');
+    output.textContent='M7 离线综合验收：'+(r.passed?'通过':'未通过')
+      +'\n测试数量：'+r.test_count
+      +'\n退出码：'+r.returncode
+      +'\n外部模型请求：无'
+      +'\n真实项目写入：无'
+      +'\n\n'+(r.output||'无输出');
+    badge.textContent=r.passed?'综合自检通过':'综合自检失败';
+  }catch(e){
+    output.textContent='综合自检失败：'+String(e);
+    badge.textContent='综合自检失败';
+  }finally{
+    btn.disabled=false;
+  }
+}
+
 async function checkModelCallGuardRegression(){
   const button=document.getElementById('modelGuardTestBtn');
   const result=document.getElementById('validationResult');
@@ -2057,6 +2084,38 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"version":p.stdout.strip() or "unknown"})
             except Exception:
                 self._json({"version":"unknown"})
+            return
+
+        if parsed.path=="/api/diagnostics/m7/full-suite":
+            # Explicit allowlist: only mocked/offline unittest files, no network.
+            try:
+                suites=[
+                    "test_task_state",
+                    "test_step_checkpoints",
+                    "test_model_call_checkpoints",
+                    "test_codex_checkpoints",
+                ]
+                proc=subprocess.run(
+                    [sys.executable,"-m","unittest",*suites,"-v"],
+                    cwd=ROOT/"web_console_v1",
+                    capture_output=True,text=True,encoding="utf-8",errors="replace",
+                    timeout=90,check=False,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0),
+                )
+                combined=((proc.stdout or "")+"\n"+(proc.stderr or ""))
+                import re
+                matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
+                count=int(matches[-1]) if matches else 0
+                expected=61  # 13 + 18 + 12 + 18 explicit test methods
+                self._json({
+                    "ok":True,"passed":proc.returncode==0 and count==expected,
+                    "test_count":count,"expected_tests":expected,
+                    "returncode":proc.returncode,
+                    "output":combined[-20000:],
+                    "models_invoked":False,"real_project_written":False,
+                })
+            except Exception as exc:
+                self._json({"ok":False,"error":"M7 离线综合自检无法完成："+str(exc)},500)
             return
 
         if parsed.path=="/api/diagnostics/model-call-guard/self-test":
