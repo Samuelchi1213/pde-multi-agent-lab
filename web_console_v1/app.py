@@ -797,8 +797,15 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button><button id="inspectInterruptedBtn" style="display:none" onclick="inspectInterruptedTask()">诊断本次中断（只读）</button>
     <button id="resumeQaOnlyBtn" style="display:none;background:#166534" onclick="resumeQaOnly()">仅恢复测试复核（需授权 DeepSeek）</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
+    <div id="manualReworkPanel" class="card human" style="display:none;margin-top:14px">
+      <h4>人工验收退回 · Codex 定向返工</h4>
+      <p>已保留本轮已发布代码和原始数据。本次仅修复历史记录查询、日期校验、默认不关闭异常。</p>
+      <button id="manualPreviewBtn" onclick="previewManualRework()">查看三项返工范围（只读）</button>
+      <pre id="manualReworkDetails" style="white-space:pre-wrap;max-height:350px;overflow:auto">等待查看原任务反馈与执行范围。</pre>
+      <button id="manualStartBtn" onclick="confirmManualRework()" style="display:none;background:#166534">确认只运行一次 Codex 定向返工</button>
+    </div>
     <div id="safePublishPanel" class="card human" style="display:none;margin-top:14px">
-      <h4>QA 已通过 · 安全发布准备</h4>
+      <h4 id="safePublishHeading">程序变更已通过检查 · 安全发布准备</h4>
       <p>先预览代码差异。系统只更新程序文件、跳过学生数据，并在发布前备份被替换的程序文件。</p>
       <button id="previewSafePublishBtn" onclick="previewSafePublish()">查看安全发布预览</button>
       <pre id="safePublishDetails" style="white-space:pre-wrap;max-height:350px;overflow:auto">尚未预览。</pre>
@@ -1726,7 +1733,15 @@ async function pollTeam(){
     return;
   }
   const s=d.state||{};
+  const manualPanel=document.getElementById('manualReworkPanel');
+  if(manualPanel)manualPanel.style.display=
+    (!d.running && s.status==='需要人工返工')?'block':'none';
   const safePanel=document.getElementById('safePublishPanel');
+  const safeHeading=document.getElementById('safePublishHeading');
+  if(safeHeading)safeHeading.textContent=
+    s.status==='定向返工测试通过（待安全发布）'
+      ?'定向返工回归测试通过 · 准备安全发布'
+      :'独立 QA 复核通过 · 准备安全发布';
   if(safePanel)safePanel.style.display=
     (!d.running && (
       s.status==='复核通过（待安全发布）' ||
