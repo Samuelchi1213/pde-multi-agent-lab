@@ -711,6 +711,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button><button id="inspectInterruptedBtn" style="display:none" onclick="inspectInterruptedTask()">诊断本次中断（只读）</button>
     <button id="resumeQaOnlyBtn" style="display:none;background:#166534" onclick="resumeQaOnly()">仅恢复测试复核（需授权 DeepSeek）</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
+    <div id="safePublishPanel" class="card human" style="display:none;margin-top:14px">
+      <h4>QA 已通过 · 安全发布准备</h4>
+      <p>先预览代码差异。系统只更新程序文件、跳过学生数据，并在发布前备份被替换的程序文件。</p>
+      <button id="previewSafePublishBtn" onclick="previewSafePublish()">查看安全发布预览</button>
+      <pre id="safePublishDetails" style="white-space:pre-wrap;max-height:350px;overflow:auto">尚未预览。</pre>
+      <button id="confirmSafePublishBtn" style="display:none;background:#166534" onclick="confirmSafePublish()">确认安全发布候选版本</button>
+    </div>
     <div id="budgetAsk" class="card human" style="display:none;margin-top:14px">
       <h4>需要追加少量预算</h4>
       <div id="budgetAskText"></div>
@@ -1541,6 +1548,9 @@ async function pollTeam(){
     return;
   }
   const s=d.state||{};
+  const safePanel=document.getElementById('safePublishPanel');
+  if(safePanel)safePanel.style.display=
+    (!d.running && s.status==='复核通过（待安全发布）')?'block':'none';
   document.getElementById('teamCard').style.display='block';
   document.getElementById('teamStatus').textContent=s.status||'准备中';
   document.getElementById('currentAgent').textContent=s.current_agent||'-';
