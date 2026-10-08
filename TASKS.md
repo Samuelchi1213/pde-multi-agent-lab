@@ -451,3 +451,14 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 | M6.16-002 | 后端 JSON 响应禁止缓存 | DONE |
 | M6.16-003 | 验收刷新增加 cache-buster | DONE |
 | M6.16-004 | 验证 runtime.json 写入后立即可见 | TODO |
+
+
+## Milestone 6.17｜runtime 入口诊断
+
+| ID | 任务 | 状态 |
+|---|---|---|
+| M6.17-001 | 区分 runtime.json 不存在与格式无效 | DONE |
+| M6.17-002 | 显示 runtime.json 解析错误和原始内容 | DONE |
+| M6.17-003 | 兼容常见 runtime 字段别名 | DONE |
+| M6.17-004 | 刷新按钮显示明确刷新状态 | DONE |
+| M6.17-005 | 本地确认返校 UI runtime schema | TODO |
