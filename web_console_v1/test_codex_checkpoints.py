@@ -177,5 +177,116 @@ class TestCodexGuard(unittest.TestCase):
             program_snapshot(self.ws)
 
 
+from unittest.mock import patch
+from team_executor import DynamicTeamRun
+from manual_rework import run_targeted_rework
+
+
+class TestCodexEntrypointIntegration(unittest.TestCase):
+    """Exercises PDE's real Python call sites, but substitutes mock executors."""
+
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory()
+        self.root=Path(self.tmp.name)
+        self.draft={"goal":"fake sandbox only","analysis":{"required_agents":[]}}
+        schema=self.root/"orchestrator_v1"/"schemas"
+        schema.mkdir(parents=True)
+        (schema/"dynamic_codex_schema.json").write_text('{"type":"object"}',encoding="utf-8")
+        self.run=DynamicTeamRun(self.root,"DRAFT-ENTRY",self.draft,"no-api-key")
+        self.run.save()
+        (self.run.workspace/"src").mkdir()
+        (self.run.workspace/"src"/"app.py").write_text("before",encoding="utf-8")
+        self.delivery=self.run.run_dir/"codex_delivery.json"
+        self.calls=0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fake_codex(self,workspace,prompt,schema_path,result_path):
+        self.calls+=1
+        (workspace/"src"/"app.py").write_text("after",encoding="utf-8")
+        data={"status":"success","summary":"mock Codex"}
+        result_path.write_text(json.dumps(data),encoding="utf-8")
+        return data
+
+    def test_dynamic_team_first_codex_is_counted_once(self):
+        with patch("team_executor.run_codex",side_effect=self.fake_codex):
+            one=self.run.codex_step("developer.first","prompt",self.delivery)
+            two=self.run.codex_step("developer.first","prompt",self.delivery)
+        self.assertEqual(one,two)
+        self.assertEqual(self.calls,1)
+        self.assertEqual(self.run.state["codex_calls"],1)
+
+    def test_dynamic_team_restart_reuses_codex_result_not_cli(self):
+        with patch("team_executor.run_codex",side_effect=self.fake_codex):
+            self.run.codex_step("developer.first","prompt",self.delivery)
+        restarted=DynamicTeamRun(self.root,"DRAFT-ENTRY",self.draft,"no-api-key")
+        restarted.state=json.loads(self.run.state_file.read_text(encoding="utf-8"))
+        with patch("team_executor.run_codex",side_effect=AssertionError("DUPLICATE CLI")) as fake:
+            restored=restarted.codex_step("developer.first","prompt",self.delivery)
+        fake.assert_not_called()
+        self.assertEqual(restored["summary"],"mock Codex")
+        self.assertEqual(restarted.state["codex_calls"],1)
+
+    def test_dynamic_team_timeout_is_not_automatically_replayed(self):
+        def fake_timeout(*args):
+            self.calls+=1
+            (self.run.workspace/"src"/"app.py").write_text("halfway",encoding="utf-8")
+            raise TimeoutError("mock")
+        with patch("team_executor.run_codex",side_effect=fake_timeout):
+            with self.assertRaises(TimeoutError):
+                self.run.codex_step("developer.first","prompt",self.delivery)
+        with patch("team_executor.run_codex",side_effect=AssertionError("DUPLICATE CLI")) as fake:
+            with self.assertRaises(CheckpointError):
+                self.run.codex_step("developer.first","prompt",self.delivery)
+        fake.assert_not_called()
+        self.assertEqual(self.calls,1)
+
+    def test_manual_rework_has_separate_ledger_and_does_not_copy_student_data(self):
+        source=self.root/"real_demo"
+        (source/"src"/"data").mkdir(parents=True)
+        (source/"src"/"app.py").write_text("before",encoding="utf-8")
+        student_data=source/"src"/"data"/"return_status.json"
+        student_data.write_text('{"student":"ORIGINAL"}',encoding="utf-8")
+        run_id="DRAFT-REWORK"
+        state={
+            "draft_id":run_id,"codex_calls":2,"deepseek_tokens":1234,
+            "timeline":[{"action":"人工验收退回返工","detail":{"note":"demo"}}],
+        }
+        def mock_manual(workspace,prompt,schema_path,result_path):
+            (workspace/"src"/"app.py").write_text("after",encoding="utf-8")
+            delivery={"status":"success","summary":"mock repaired","files_changed":["src/app.py"]}
+            result_path.write_text(json.dumps(delivery),encoding="utf-8")
+            return delivery
+        evidence={"returncode":0,"stdout":"","stderr":"Ran 32 tests in 0.01s\n\nOK"}
+        with patch("manual_rework.run_codex",side_effect=mock_manual) as cli:
+            with patch("manual_rework.run_python_tests",return_value=evidence):
+                result=run_targeted_rework(self.root,run_id,self.draft,state,source)
+        self.assertEqual(cli.call_count,1)
+        self.assertEqual(result["status"],"定向返工测试通过（待安全发布）")
+        self.assertEqual(result["codex_calls"],3)
+        self.assertEqual(result["deepseek_tokens"],1234)
+        self.assertEqual(student_data.read_text(encoding="utf-8"),'{"student":"ORIGINAL"}')
+        rework=self.root/"orchestrator_v1"/"dynamic_runs"/run_id/"manual_rework_1"
+        self.assertFalse((rework/"workspace"/"src"/"data").exists())
+        self.assertEqual(inspect_step(rework,"manual.rework.1")["decision"],"reuse_saved_result")
+
+    def test_manual_rework_timeout_retains_original_data_and_blocks_duplicate(self):
+        source=self.root/"real_demo"
+        (source/"src").mkdir(parents=True)
+        (source/"src"/"app.py").write_text("original",encoding="utf-8")
+        run_id="DRAFT-REWORK"
+        state={"draft_id":run_id,"codex_calls":1,"timeline":[]}
+        def mock_timeout(workspace,prompt,schema_path,result_path):
+            (workspace/"src"/"app.py").write_text("partial update",encoding="utf-8")
+            raise TimeoutError("pretend crash")
+        with patch("manual_rework.run_codex",side_effect=mock_timeout):
+            result=run_targeted_rework(self.root,run_id,self.draft,state,source)
+        self.assertEqual(result["status"],"定向返工失败（隔离成果保留）")
+        self.assertEqual((source/"src"/"app.py").read_text(encoding="utf-8"),"original")
+        rework=self.root/"orchestrator_v1"/"dynamic_runs"/run_id/"manual_rework_1"
+        self.assertEqual(inspect_step(rework,"manual.rework.1")["decision"],"blocked_uncertain")
+
+
 if __name__=="__main__":
     unittest.main()
