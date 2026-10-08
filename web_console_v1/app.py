@@ -1874,6 +1874,41 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path=="/api/team/safe-publish-preview":
+            draft_id=parse_qs(parsed.query).get("draft_id",[""])[0]
+            with LOCK:
+                in_progress=bool(TEAM_RUNS.get(draft_id,{}).get("running"))
+            if in_progress:
+                self._json({"ok":False,"error":"团队仍在执行，暂不可发布"},409)
+                return
+            try:
+                from safe_candidate_publish import build_publish_plan
+                ctx=safe_candidate_context(draft_id)
+                plan=build_publish_plan(ctx["workspace"],ctx["project"],ctx["allowed"])
+                proc=PROJECT_APP.get("process")
+                workbench_running=bool(proc is not None and proc.poll() is None)
+                self._json({
+                    "ok":True,
+                    "draft_id":draft_id,
+                    "project":str(ctx["project"]),
+                    "revision":plan["revision"],
+                    "changes":plan["changes"],
+                    "change_count":len(plan["changes"]),
+                    "skipped_data":plan["skipped_data"],
+                    "skipped_data_count":len(plan["skipped_data"]),
+                    "blocked":plan["blocked"],
+                    "workbench_running":workbench_running,
+                    "ready":bool(plan["changes"]) and not plan["blocked"] and not workbench_running,
+                    "qa_summary":str(ctx["review"].get("summary") or ""),
+                    "qa_findings":ctx["review"].get("findings") or [],
+                    "safety":"不会删除真实项目文件、不会复制学生数据目录或数据库；只更新预览列出的程序文件。原程序文件先备份，之后仍需人工验收。"
+                })
+            except (ValueError,OSError) as exc:
+                self._json({"ok":False,"error":str(exc)},409)
+            except Exception as exc:
+                self._json({"ok":False,"error":"发布预览失败："+str(exc)},500)
+            return
+
         if parsed.path=="/api/team/recovery/inspect":
             q=parse_qs(parsed.query)
             draft_id=q.get("draft_id",[""])[0].strip()
