@@ -319,10 +319,10 @@ class DynamicTeamRun:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts.mkdir(parents=True, exist_ok=True)
         self.workspace.mkdir(parents=True, exist_ok=True)
-        self.state_file.write_text(
-            json.dumps(self.state, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
+        # Use a temporary file + os.replace so an abrupt shutdown cannot
+        # leave a truncated state.json that hides previously saved progress.
+        from task_state import atomic_write_json
+        atomic_write_json(self.state_file, self.state)
 
     def event(self, agent, action, detail=None):
         self.state["current_agent"] = agent
