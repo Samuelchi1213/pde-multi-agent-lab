@@ -462,3 +462,10 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 | M6.17-003 | 兼容常见 runtime 字段别名 | DONE |
 | M6.17-004 | 刷新按钮显示明确刷新状态 | DONE |
 | M6.17-005 | 本地确认返校 UI runtime schema | TODO |
+
+
+## M6.18｜入口格式修复
+- [x] 支持授权范围内的 .ps1 用户入口
+- [x] 发现 src/web_server.py 时优先以 Python 直接运行
+- [x] 防止本机端口被其他进程占用时误报成功
+- [ ] Windows 本地启动并由用户验收
