@@ -293,6 +293,9 @@ def latest_resumable_team_run():
         "执行失败","验证失败","执行中断（需要检查）",
         "测试复核恢复中","复核中断（已保留成果）","复核通过（待安全发布）",
         "复核发现需返工","复核等待负责人决定","复核失败（保留成果）",
+        "定向返工：准备中","定向返工：Codex 修改中","定向返工：独立回归测试中",
+        "定向返工测试通过（待安全发布）","定向返工测试未通过",
+        "定向返工失败（隔离成果保留）","定向返工中断（隔离成果保留）",
     }
     candidates=[]
     for draft_id,info in TEAM_RUNS.items():
@@ -319,10 +322,18 @@ def latest_resumable_team_run():
             } else disk_state or memory_state
         if state.get("status") not in statuses and not live:
             continue
-        if not live and state.get("status") in {"准备中","执行中","自动返工中","测试复核恢复中"}:
+        if not live and state.get("status") in {
+            "准备中","执行中","自动返工中","测试复核恢复中",
+            "定向返工：准备中","定向返工：Codex 修改中","定向返工：独立回归测试中"
+        }:
             state=dict(state)
             qa_interrupted=state.get("status")=="测试复核恢复中"
-            state["status"]="复核中断（已保留成果）" if qa_interrupted else "执行中断（需要检查）"
+            manual_interrupted=state.get("status","").startswith("定向返工：")
+            state["status"]=(
+                "定向返工中断（隔离成果保留）" if manual_interrupted else
+                "复核中断（已保留成果）" if qa_interrupted else
+                "执行中断（需要检查）"
+            )
             state["current_agent"]=""
             state["diagnostic_note"]=(
                 "单独 QA 复核线程已不存在。恢复尝试已记录，不能自动重复付费调用；请检查 QA 结果文件。"
@@ -1717,7 +1728,10 @@ async function pollTeam(){
   const s=d.state||{};
   const safePanel=document.getElementById('safePublishPanel');
   if(safePanel)safePanel.style.display=
-    (!d.running && s.status==='复核通过（待安全发布）')?'block':'none';
+    (!d.running && (
+      s.status==='复核通过（待安全发布）' ||
+      s.status==='定向返工测试通过（待安全发布）'
+    ))?'block':'none';
   document.getElementById('teamCard').style.display='block';
   document.getElementById('teamStatus').textContent=s.status||'准备中';
   document.getElementById('currentAgent').textContent=s.current_agent||'-';
@@ -1792,7 +1806,11 @@ async function pollTeam(){
   const qaBtn=document.getElementById('resumeQaOnlyBtn');
   if(qaBtn && (running || !interrupted))qaBtn.style.display='none';
   document.getElementById('executeBtn').disabled=!!running || interrupted
-    || ['复核通过（待安全发布）','复核发现需返工','复核等待负责人决定','复核失败（保留成果）'].includes(s.status);
+    || ['复核通过（待安全发布）','复核发现需返工','复核等待负责人决定','复核失败（保留成果）',
+        '需要人工返工','等待人工验收','已完成',
+        '定向返工：准备中','定向返工：Codex 修改中','定向返工：独立回归测试中',
+        '定向返工测试通过（待安全发布）','定向返工测试未通过',
+        '定向返工失败（隔离成果保留）','定向返工中断（隔离成果保留）'].includes(s.status);
   document.getElementById('executeBadge').textContent=running
     ?(Number(d.last_progress_seconds)>=300?'后台仍在运行，超过5分钟无进展':'后台执行中')
     :(s.status||'已结束');
@@ -2229,10 +2247,18 @@ class Handler(BaseHTTPRequestHandler):
                 state=disk_state or memory_state
 
             # 控制台重启后，旧任务不能假装仍然在运行。
-            if not running and state.get("status") in {"执行中","准备中","自动返工中","测试复核恢复中"}:
+            if not running and state.get("status") in {
+                "执行中","准备中","自动返工中","测试复核恢复中",
+                "定向返工：准备中","定向返工：Codex 修改中","定向返工：独立回归测试中"
+            }:
                 state=dict(state)
                 qa_stopped=state.get("status")=="测试复核恢复中"
-                state["status"]="复核中断（已保留成果）" if qa_stopped else "执行中断（需要检查）"
+                manual_stopped=state.get("status","").startswith("定向返工：")
+                state["status"]=(
+                    "定向返工中断（隔离成果保留）" if manual_stopped else
+                    "复核中断（已保留成果）" if qa_stopped else
+                    "执行中断（需要检查）"
+                )
                 state["current_agent"]=""
                 state["diagnostic_note"]=(
                     "单独 QA 复核已中断；已有尝试记录，禁止自动重复调用。"
@@ -3292,6 +3318,11 @@ class Handler(BaseHTTPRequestHandler):
             draft=ANALYSES[draft_id]
             if not draft.get("confirmed"):
                 self._json({"ok":False,"error":"请先确认任务草案"},400)
+                return
+
+            existing=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
+            if existing.is_file():
+                self._json({"ok":False,"error":"该草案已有开发/验收历史，禁止重新启动整轮团队。请使用 Codex 定向返工。"},409)
                 return
 
             if not api_key and not os.getenv("DEEPSEEK_API_KEY"):
