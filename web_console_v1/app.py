@@ -2094,6 +2094,7 @@ class Handler(BaseHTTPRequestHandler):
                     "test_step_checkpoints",
                     "test_model_call_checkpoints",
                     "test_codex_checkpoints",
+                    "test_safe_staging_and_release",
                 ]
                 proc=subprocess.run(
                     [sys.executable,"-m","unittest",*suites,"-v"],
@@ -2106,7 +2107,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=66  # 13 state + 18 steps + 12 DeepSeek + 23 Codex/integration
+                expected=73  # 13 state + 18 steps + 12 DeepSeek + 23 Codex + 7 safety
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
