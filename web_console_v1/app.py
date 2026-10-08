@@ -2106,7 +2106,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=61  # 13 + 18 + 12 + 18 explicit test methods
+                expected=66  # 13 state + 18 steps + 12 DeepSeek + 23 Codex/integration
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
