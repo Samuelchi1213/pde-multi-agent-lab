@@ -15,6 +15,7 @@ import urllib.error
 from coordinator import analyze_goal, refine_goal
 from team_executor import DynamicTeamRun
 from agent_profiles import load_agent_profiles
+from task_state import project_team_status, read_state
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -206,6 +207,7 @@ def load_saved_drafts():
 
 
 def restore_team_runs_from_disk():
+    """Restore run *records*, never implicitly restart a worker or model call."""
     runs_dir=ROOT/"orchestrator_v1"/"dynamic_runs"
     if not runs_dir.exists():
         return
@@ -213,13 +215,19 @@ def restore_team_runs_from_disk():
         if not run_dir.is_dir():
             continue
         state_path=run_dir/"state.json"
-        if not state_path.exists():
+        if not state_path.is_file():
             continue
-        try:
-            state=json.loads(state_path.read_text(encoding="utf-8"))
-            TEAM_RUNS[run_dir.name]={"running":False,"state":state}
-        except Exception:
-            continue
+        state,error=read_state(state_path)
+        if error:
+            state={
+                "draft_id":run_dir.name,
+                "status":"状态文件异常（只读检查）",
+                "state_file_error":error,
+                "current_agent":"",
+                "diagnostic_note":"历史 state.json 读取失败；保留原文件和隔离工作区，严禁自动重新执行。",
+            }
+        TEAM_RUNS[run_dir.name]={"running":False,"state":state}
+
 
 
 def latest_publishable_candidate():
@@ -285,67 +293,40 @@ def latest_pending_team_run():
 
 
 def latest_resumable_team_run():
-    """供页面恢复显示使用；与验收发布候选查找分开，绝不自动重跑任务。"""
+    """Use exactly the same run projection as /api/team/status (read-only)."""
     statuses={
         "准备中","执行中","自动返工中",
         "等待人工验收","等待人工决策","等待预算确认",
-        "需要人工返工","准备继续",
+        "需要人工返工","准备继续","已取消",
         "执行失败","验证失败","执行中断（需要检查）",
         "测试复核恢复中","复核中断（已保留成果）","复核通过（待安全发布）",
         "复核发现需返工","复核等待负责人决定","复核失败（保留成果）",
         "定向返工：准备中","定向返工：Codex 修改中","定向返工：独立回归测试中",
         "定向返工测试通过（待安全发布）","定向返工测试未通过",
         "定向返工失败（隔离成果保留）","定向返工中断（隔离成果保留）",
+        "状态文件异常（只读检查）",
     }
     candidates=[]
-    for draft_id,info in TEAM_RUNS.items():
+    for draft_id, info in TEAM_RUNS.items():
         if not isinstance(info,dict):
             continue
         state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
-        memory_state=info.get("state") or {}
-        disk_state={}
-        modified=0
-        if state_path.exists():
-            try:
-                modified=state_path.stat().st_mtime
-                disk_state=json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError,ValueError):
-                disk_state={}
-        live=bool(info.get("running"))
-        # 后台仍运行时使用实时磁盘进度；已结束时优先采用内存最终结果。
-        if live:
-            state=disk_state or memory_state
-        else:
-            state=memory_state if memory_state.get("status") in {
-                "执行失败","验证失败","已完成","等待人工验收",
-                "等待人工决策","等待预算确认","需要人工返工"
-            } else disk_state or memory_state
+        snapshot=project_team_status(state_path,info)
+        state=snapshot["state"]
+        live=snapshot["running"]
         if state.get("status") not in statuses and not live:
             continue
-        if not live and state.get("status") in {
-            "准备中","执行中","自动返工中","测试复核恢复中",
-            "定向返工：准备中","定向返工：Codex 修改中","定向返工：独立回归测试中"
-        }:
-            state=dict(state)
-            qa_interrupted=state.get("status")=="测试复核恢复中"
-            manual_interrupted=state.get("status","").startswith("定向返工：")
-            state["status"]=(
-                "定向返工中断（隔离成果保留）" if manual_interrupted else
-                "复核中断（已保留成果）" if qa_interrupted else
-                "执行中断（需要检查）"
-            )
-            state["current_agent"]=""
-            state["diagnostic_note"]=(
-                "单独 QA 复核线程已不存在。恢复尝试已记录，不能自动重复付费调用；请检查 QA 结果文件。"
-                if qa_interrupted else
-                "当前没有后台执行线程。保留现有候选代码，请先检查日志，勿重新启动本任务。"
-            )
+        try:
+            modified=state_path.stat().st_mtime
+        except OSError:
+            modified=0
         candidates.append((1 if live else 0,modified,draft_id,state,live))
     if not candidates:
         return None
     candidates.sort(reverse=True,key=lambda x:(x[0],x[1]))
     _,_,draft_id,state,live=candidates[0]
     return {"draft_id":draft_id,"state":state,"running":live}
+
 
 
 def manual_rework_context(draft_id):
@@ -1890,7 +1871,8 @@ async function pollTeam(){
         '需要人工返工','等待人工验收','已完成',
         '定向返工：准备中','定向返工：Codex 修改中','定向返工：独立回归测试中',
         '定向返工测试通过（待安全发布）','定向返工测试未通过',
-        '定向返工失败（隔离成果保留）','定向返工中断（隔离成果保留）'].includes(s.status);
+        '定向返工失败（隔离成果保留）','定向返工中断（隔离成果保留）',
+        '状态文件异常（只读检查）'].includes(s.status);
   document.getElementById('executeBadge').textContent=running
     ?(Number(d.last_progress_seconds)>=300?'后台仍在运行，超过5分钟无进展':'后台执行中')
     :(s.status||'已结束');
@@ -2297,66 +2279,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path=="/api/team/status":
             q=parse_qs(parsed.query)
             draft_id=q.get("draft_id",[""])[0]
-
             with LOCK:
-                meta=TEAM_RUNS.get(draft_id,{})
-                running=bool(meta.get("running"))
-                memory_state=dict(meta.get("state") or {})
-
-            # DynamicTeamRun 会持续把最新状态写到 state.json。
-            # 运行期间优先读取磁盘中的实时状态，避免页面一直停留在“准备中”。
+                meta=dict(TEAM_RUNS.get(draft_id) or {})
             state_path=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id/"state.json"
-            disk_state={}
-            if state_path.exists():
-                try:
-                    disk_state=json.loads(state_path.read_text(encoding="utf-8"))
-                except Exception:
-                    disk_state={}
-
-            # worker 的失败结果可能只进入内存；此前磁盘旧“执行中”会盖住错误。
-            # 只要后台线程已经退出，必须优先显示终态，而不是旧的磁盘进度。
-            terminal_statuses={
-                "执行失败","验证失败","已完成","等待人工验收",
-                "等待人工决策","等待预算确认","需要人工返工",
-                "已取消","已中止"
-            }
-            memory_status=memory_state.get("status","")
-            if not running and memory_status in terminal_statuses:
-                state=memory_state
-            else:
-                state=disk_state or memory_state
-
-            # 控制台重启后，旧任务不能假装仍然在运行。
-            if not running and state.get("status") in {
-                "执行中","准备中","自动返工中","测试复核恢复中",
-                "定向返工：准备中","定向返工：Codex 修改中","定向返工：独立回归测试中"
-            }:
-                state=dict(state)
-                qa_stopped=state.get("status")=="测试复核恢复中"
-                manual_stopped=state.get("status","").startswith("定向返工：")
-                state["status"]=(
-                    "定向返工中断（隔离成果保留）" if manual_stopped else
-                    "复核中断（已保留成果）" if qa_stopped else
-                    "执行中断（需要检查）"
-                )
-                state["current_agent"]=""
-                state["diagnostic_note"]=(
-                    "单独 QA 复核已中断；已有尝试记录，禁止自动重复调用。"
-                    if qa_stopped else
-                    "后台执行线程已不存在，但上次落盘状态尚无最终结论。现有隔离工作区已保留，请勿直接重复启动同一草案。"
-                )
-
-            age_seconds=None
-            if state_path.exists():
-                try:
-                    age_seconds=max(0,int(time.time()-state_path.stat().st_mtime))
-                except OSError:
-                    pass
-            self._json({
-                "ok":True,"running":running,"state":state,
-                "last_progress_seconds":age_seconds,
-                "state_source":"memory_final" if (not running and memory_status in terminal_statuses) else "disk",
-            })
+            snapshot=project_team_status(state_path,meta)
+            self._json(snapshot)
             return
 
         self.send_error(404)
