@@ -3193,6 +3193,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok":True,"new_budget":state["deepseek_token_budget"],"validation":True})
                 return
 
+            # M7-003: the legacy budget resume ran the entire team again
+            # and could delete/rebuild staging + repeat paid Codex calls.
+            # Until the stage-specific resume handler is implemented and
+            # tested, do not accept authorization to restart that path.
+            self._json({
+                "ok":False,
+                "error":"当前预算续跑方式可能重新执行整个团队和覆盖隔离成果，"
+                        "为防止重复计费已安全拦截。现有结果、预算申请和工作区均保留；"
+                        "请先完成步骤级安全续跑升级，再从原步骤继续。",
+                "safe_resume_required":True,
+                "draft_id":draft_id,
+            },409)
+            return
+
             current_budget=int(req.get("budget") or state.get("deepseek_token_budget") or 16000)
             extra=int(req.get("requested_extra") or 3000)
             approved=min(current_budget+extra,30000)
