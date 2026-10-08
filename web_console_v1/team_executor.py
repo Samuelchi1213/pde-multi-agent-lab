@@ -334,45 +334,88 @@ class DynamicTeamRun:
         })
         self.save()
 
-    def use_ds(self, role, system, payload):
-        if self.state["deepseek_tokens"] >= self.state["deepseek_token_budget"]:
-            requested_extra = min(
-                4000,
-                max(1500, self.state["deepseek_absolute_budget"] - self.state["deepseek_token_budget"])
+    def use_ds(self, role, system, payload, *, step_id):
+        """Call DeepSeek only after durable reservation; reuse verified prior receipts.
+
+        Fail closed on ambiguous calls, changed inputs, or receipt corruption.
+        Historical runs without a new ledger are NOT implicitly resumed.
+        """
+        from step_checkpoints import CheckpointError, inspect_step, reserve_step, finish_step, mark_uncertain
+        from task_state import atomic_write_json
+
+        inputs={"role":role,"system":system,"payload":payload,"model":"deepseek-chat"}
+        probe=inspect_step(self.run_dir,step_id,inputs)
+        if probe["decision"] not in {"not_started","reuse_saved_result"}:
+            raise CheckpointError(
+                f"步骤 {step_id} 状态 {probe['decision']}；为避免重复计费已停止，"
+                "保留所有产物，需人工检查检查点与结果回执。"
             )
-            raise BudgetApprovalRequired(
-                role,
-                self.state["deepseek_tokens"],
-                self.state["deepseek_token_budget"],
-                requested_extra,
-                f"{role} 仍需继续完成当前工作，现有 token 预算已用尽。"
-            )
+        if probe["decision"] == "not_started":
+            # Budget must be checked BEFORE reserving; lack of budget is not
+            # evidence that a paid request was ever sent.
+            if self.state["deepseek_tokens"] >= self.state["deepseek_token_budget"]:
+                requested_extra=min(
+                    4000,
+                    max(1500,self.state["deepseek_absolute_budget"]-self.state["deepseek_token_budget"])
+                )
+                raise BudgetApprovalRequired(
+                    role,self.state["deepseek_tokens"],self.state["deepseek_token_budget"],
+                    requested_extra,f"{role} 需要新的模型调用，现有 token 预算已用尽。"
+                )
+            decision=reserve_step(self.run_dir,step_id,inputs)
+            if decision["decision"] != "reserved":
+                raise CheckpointError(
+                    f"步骤 {step_id} 并发预约被拒绝：{decision['decision']}；不得重复调用模型"
+                )
+            try:
+                result,usage=deepseek_json(self.api_key,system,payload)
+                if not isinstance(result,dict) or not isinstance(usage,dict):
+                    raise ValueError("DeepSeek 返回结构不符合预期，结果不确定")
+                self.artifacts.mkdir(parents=True,exist_ok=True)
+                # Per-step receipt avoids overwriting previous requests if the
+                # runner's in-memory call counter was lost in a sudden crash.
+                receipt=self.artifacts/f"deepseek_step_{step_id}.json"
+                atomic_write_json(receipt,{"step_id":step_id,"role":role,"usage":usage,"result":result})
+                finish_step(self.run_dir,step_id,inputs,str(receipt.relative_to(self.run_dir)))
+            except BaseException as exc:
+                # A request can be billed even if the client sees a timeout.
+                # Never automatically release a reservation for retry.
+                try:
+                    mark_uncertain(self.run_dir,step_id,type(exc).__name__)
+                except Exception:
+                    pass
+                raise
+        else:
+            receipt=self.run_dir/probe["receipt"]
+            saved=json.loads(receipt.read_text(encoding="utf-8"))
+            if not isinstance(saved,dict) or saved.get("step_id")!=step_id or saved.get("role")!=role:
+                raise CheckpointError("模型历史回执与预期步骤不一致；禁止自动复用")
+            result,usage=saved.get("result"),saved.get("usage")
+            if not isinstance(result,dict) or not isinstance(usage,dict):
+                raise CheckpointError("模型历史回执格式无效；禁止重复调用")
+            self.event("成本控制器","复用已核验的 DeepSeek 结果，不重复调用",{"step_id":step_id})
 
-        result, usage = deepseek_json(self.api_key, system, payload)
-        used = int(usage.get("total_tokens", 0) or 0)
+        # Count usage exactly once per step even if a restart happens between
+        # finishing a receipt and updating the aggregate state file.
+        accounted=self.state.setdefault("billed_step_ids",[])
+        if not isinstance(accounted,list):
+            raise CheckpointError("模型计费状态损坏；禁止进一步执行")
+        if step_id not in accounted:
+            used=int(usage.get("total_tokens",0) or 0)
+            if used<0:
+                raise CheckpointError("模型计费用量非法")
+            self.state["deepseek_calls"]+=1
+            self.state["deepseek_tokens"]+=used
+            self.state["role_usage"][role]=self.state["role_usage"].get(role,0)+used
+            accounted.append(step_id)
+            self.save()
 
-        self.state["deepseek_calls"] += 1
-        self.state["deepseek_tokens"] += used
-        self.state["role_usage"][role] = self.state["role_usage"].get(role, 0) + used
-
-        # 模型响应已经返回并计入 usage：必须先把结果保存下来。
-        # 超过预算只限制下一次调用，不能丢弃这一次已经获得的 QA 结论。
-        self.artifacts.mkdir(parents=True, exist_ok=True)
-        receipt=self.artifacts / f"deepseek_response_{self.state['deepseek_calls']}.json"
-        receipt.write_text(
-            json.dumps({"role":role,"usage":usage,"result":result},
-                       ensure_ascii=False,indent=2),
-            encoding="utf-8"
-        )
-        self.save()
-        if self.state["deepseek_tokens"] > self.state["deepseek_token_budget"]:
-            self.event("成本控制器","本次调用超出预算，已保存结果；禁止下一次未经批准的调用",{
-                "role":role,
-                "used":self.state["deepseek_tokens"],
+        if self.state["deepseek_tokens"]>self.state["deepseek_token_budget"]:
+            self.event("成本控制器","本次调用超过已批预算，结果已经保留；禁止下一次未经批准的新调用",{
+                "step_id":step_id,"used":self.state["deepseek_tokens"],
                 "budget":self.state["deepseek_token_budget"],
-                "saved_receipt":str(receipt.relative_to(self.root)),
             })
-        return result, usage
+        return result,usage
 
     def extend_budget_for_rework(self, round_no):
         new_budget = min(
@@ -453,7 +496,7 @@ class DynamicTeamRun:
                 "\n这是返工后的复核。只检查上一轮问题是否解决以及是否引入新的验收阻断问题，"
                 "不要重新撰写完整项目评审。"
             )
-        review, _ = self.use_ds("测试智能体", qa_prompt, review_payload)
+        review, _ = self.use_ds("测试智能体", qa_prompt, review_payload, step_id=f"qa.review.{round_no}")
         review_file = self.artifacts / (
             "qa_review.json" if round_no == 0 else f"qa_review_rework_{round_no}.json"
         )
@@ -597,7 +640,7 @@ class DynamicTeamRun:
             product_spec, _ = self.use_ds("产品智能体", product_prompt, {
                 "confirmed_analysis": analysis,
                 "owner_constraints": self.draft.get("conversation", [])[-2:],
-            })
+            }, step_id="product.spec")
             (self.artifacts / "product_spec.json").write_text(
                 json.dumps(product_spec, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -614,6 +657,7 @@ class DynamicTeamRun:
                     "confirmed_analysis": analysis,
                     "product_spec": product_spec,
                 },
+                step_id="architecture.plan",
             )
             (self.artifacts / "architecture.json").write_text(
                 json.dumps(architecture, ensure_ascii=False, indent=2), encoding="utf-8"
