@@ -337,6 +337,54 @@ def latest_resumable_team_run():
     return {"draft_id":draft_id,"state":state,"running":live}
 
 
+def safe_candidate_context(draft_id):
+    """Validate independent QA, connected project, test evidence, and permissions."""
+    draft=ANALYSES.get(draft_id)
+    if not draft or not draft.get("confirmed") or not draft.get("use_real_project"):
+        raise ValueError("任务未确认绑定真实项目")
+    config=load_project_connection()
+    snap=draft.get("project_connection_snapshot") or {}
+    if not config.get("connected") or not config.get("validated"):
+        raise ValueError("当前真实项目未连接")
+    if config.get("mode")!="scoped_write" or snap.get("mode")!="scoped_write":
+        raise ValueError("权限范围不是 scoped_write")
+    original=Path(snap.get("path") or "").resolve()
+    current=Path(config.get("path") or "").resolve()
+    if original!=current:
+        raise ValueError("当前真实项目与原任务绑定项目不一致")
+    allowed=list(snap.get("allowed_paths") or [])
+    if sorted(allowed)!=sorted(config.get("allowed_paths") or []):
+        raise ValueError("原任务授权目录与当前授权目录不一致")
+    run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
+    state_path=run_dir/"state.json"
+    qa_path=run_dir/"artifacts"/"qa_review.json"
+    workspace=run_dir/"workspace"
+    if not (state_path.is_file() and qa_path.is_file() and workspace.is_dir()):
+        raise ValueError("隔离工作区、QA 报告或任务状态不存在")
+    state=json.loads(state_path.read_text(encoding="utf-8"))
+    review=json.loads(qa_path.read_text(encoding="utf-8"))
+    if state.get("status")!="复核通过（待安全发布）" or not state.get("qa_passed"):
+        raise ValueError("当前任务尚未正式通过独立 QA")
+    if state.get("candidate_synced"):
+        raise ValueError("候选版本已经发布")
+    if review.get("status") not in {"pass","need_human"} or (
+        review.get("status")=="need_human"
+        and review.get("human_decision_type")!="user_acceptance"
+    ):
+        raise ValueError("QA 报告不允许发布到用户验收")
+    tests=next((
+        e.get("detail") for e in reversed(state.get("timeline") or [])
+        if e.get("agent")=="系统验证器"
+        and e.get("action")=="独立运行可发现测试"
+    ),None)
+    if not isinstance(tests,dict) or tests.get("returncode")!=0:
+        raise ValueError("原独立测试没有成功证据")
+    return {
+        "state":state,"review":review,"state_path":state_path,
+        "workspace":workspace,"project":original,"allowed":allowed,
+    }
+
+
 def resolve_project_runtime(project, allowed):
     """读取用户入口；不执行 runtime.json 的 start_command 字符串。"""
     path=project/"docs"/"runtime.json"
