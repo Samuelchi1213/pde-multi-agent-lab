@@ -431,3 +431,13 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 | M6.14-003 | 按 scoped_write 同步候选版本 | DONE |
 | M6.14-004 | 发布后自动刷新用户入口 | DONE |
 | M6.14-005 | 实测返校状态 Web UI 可启动 | TODO |
+
+
+## Milestone 6.15｜候选版本发布校验
+
+| ID | 任务 | 状态 |
+|---|---|---|
+| M6.15-001 | 发布后校验真实项目 runtime.json | DONE |
+| M6.15-002 | 发布失败显示 staging/target 诊断 | DONE |
+| M6.15-003 | 验收中心显示实际 runtime.json 检查路径 | DONE |
+| M6.15-004 | 定位当前 runtime.json 未落盘原因 | TODO |
