@@ -417,6 +417,32 @@ class DynamicTeamRun:
             })
         return result,usage
 
+    def codex_step(self, step_id, prompt, result_file):
+        """Guard one Codex call using durable evidence; never replay uncertain work."""
+        from codex_checkpoints import execute_codex_step
+        delivery, reused = execute_codex_step(
+            run_dir=self.run_dir,
+            workspace=self.workspace,
+            step_id=step_id,
+            prompt=prompt,
+            schema_path=self.schema,
+            result_path=result_file,
+            executor=run_codex,
+        )
+        counted=self.state.setdefault("completed_codex_step_ids",[])
+        if not isinstance(counted,list):
+            raise RuntimeError("Codex 计数状态异常，禁止重复计数")
+        if step_id not in counted:
+            self.state["codex_calls"]+=1
+            counted.append(step_id)
+            self.save()
+        if reused:
+            self.event("系统","复用已经核对的 Codex 交付（未重新执行 CLI）",{
+                "step_id":step_id,
+                "receipt":str(result_file.relative_to(self.run_dir)),
+            })
+        return delivery
+
     def extend_budget_for_rework(self, round_no):
         new_budget = min(
             self.state["deepseek_normal_budget"] + self.state["rework_budget_step"] * round_no,
@@ -584,8 +610,7 @@ class DynamicTeamRun:
 """
         result_file = self.run_dir / f"codex_rework_{round_no}.json"
         self.event("开发智能体", f"开始第{round_no}轮返工")
-        delivery = run_codex(self.workspace, prompt, self.schema, result_file)
-        self.state["codex_calls"] += 1
+        delivery = self.codex_step(f"developer.rework.{round_no}",prompt,result_file)
         self.event("开发智能体", f"第{round_no}轮返工交付完成", delivery)
         return delivery
 
@@ -700,8 +725,7 @@ class DynamicTeamRun:
 - 按给定 JSON Schema 返回交付。
 """
             result_file = self.run_dir / "codex_delivery.json"
-            delivery = run_codex(self.workspace, prompt, self.schema, result_file)
-            self.state["codex_calls"] += 1
+            delivery = self.codex_step("developer.first",prompt,result_file)
             self.event("开发智能体", "开发交付完成", delivery)
 
         test_evidence = run_python_tests(self.workspace)
