@@ -435,7 +435,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       <div class="stat">运行入口<b id="acceptanceEntry">-</b></div>
       <div class="stat">授权范围<b id="acceptanceScope">-</b></div>
     </div>
-    <button onclick="refreshAcceptance()">刷新验收信息</button>
+    <button id="refreshAcceptanceBtn" onclick="refreshAcceptance()">刷新验收信息</button>
+    <span id="acceptanceRefreshBadge" class="badge">尚未手动刷新</span>
     <button onclick="runAcceptanceTests()" style="background:#166534;margin-left:8px">运行基础测试</button>
     <button id="publishPendingBtn" onclick="publishPendingFromAcceptance()" style="background:#0f766e;margin-left:8px;display:none">发布待验收版本</button>
     <button id="launchProjectBtn" onclick="launchAcceptedProject()" style="background:#2563eb;margin-left:8px">启动工作台</button>
@@ -736,37 +737,63 @@ async function disconnectProject(){
 }
 
 async function refreshAcceptance(){
-  const r=await api('/api/project/acceptance?t='+Date.now());
-  if(!r.ok){
-    document.getElementById('acceptanceSummary').textContent=r.error||'尚未连接真实项目。';
-    document.getElementById('acceptanceTree').textContent='暂无。';
-    return;
+  const btn=document.getElementById('refreshAcceptanceBtn');
+  const badge=document.getElementById('acceptanceRefreshBadge');
+  if(btn)btn.disabled=true;
+  if(badge)badge.textContent='刷新中...';
+
+  try{
+    const r=await api('/api/project/acceptance?t='+Date.now());
+    if(!r.ok){
+      document.getElementById('acceptanceSummary').textContent=r.error||'尚未连接真实项目。';
+      document.getElementById('acceptanceTree').textContent='暂无。';
+      if(badge)badge.textContent='刷新失败';
+      return;
+    }
+
+    document.getElementById('acceptanceSummary').innerHTML=
+      '当前项目：<b>'+escapeHtml(r.project||'')+'</b><br>'
+      +'路径：'+escapeHtml(r.path||'');
+    document.getElementById('acceptanceFileCount').textContent=r.file_count||0;
+    document.getElementById('acceptanceEntry').textContent=r.entry||'未检测到';
+    document.getElementById('acceptanceScope').textContent=(r.allowed_paths||[]).join(', ')||'只读';
+    document.getElementById('acceptanceTree').textContent=(r.tree||[]).join('\n')||'项目为空。';
+
+    const hint=document.getElementById('acceptanceRuntimeHint');
+    ACCEPTANCE_RUNTIME_READY=!!r.runtime_manifest;
+
+    if(r.runtime_manifest){
+      const m=r.runtime_manifest;
+      hint.innerHTML='✅ 已识别用户入口：<b>'+escapeHtml(m.entry||'')+'</b>'
+        +(m.type?'<br>类型：'+escapeHtml(m.type):'')
+        +(m.url?'<br>地址：'+escapeHtml(m.url):'')
+        +'<br>runtime.json：'+escapeHtml(r.runtime_manifest_path||'');
+    }else if(r.runtime_manifest_exists){
+      hint.innerHTML='⚠️ 已找到 docs/runtime.json，但当前格式无法作为用户入口使用。<br>'
+        +'路径：'+escapeHtml(r.runtime_manifest_path||'')
+        +'<br>原因：<b>'+escapeHtml(r.runtime_manifest_error||'格式不符合要求')+'</b>'
+        +'<br>当前内容：<pre style="max-height:180px">'+escapeHtml(JSON.stringify(r.runtime_manifest_raw||{},null,2))+'</pre>';
+    }else{
+      hint.innerHTML='当前只检测到技术入口 <b>'+escapeHtml(r.entry||'无')+'</b>，'
+        +'尚未找到 docs/runtime.json。<br>'
+        +'检查路径：'+escapeHtml(r.runtime_manifest_path||'')+'<br>'
+        +(r.pending_candidate_available
+          ? '<b>检测到隔离工作区里已有待验收版本，请点击“发布待验收版本”。</b>'
+          : '这意味着“代码可运行”不等于“你已经能直接使用这个功能”。');
+    }
+
+    const publishBtn=document.getElementById('publishPendingBtn');
+    if(publishBtn)publishBtn.style.display=(!r.runtime_manifest_exists && r.pending_candidate_available)?'inline-block':'none';
+    updateProjectRunButtons(r.runtime_status||{});
+
+    const now=new Date();
+    if(badge)badge.textContent='已刷新 '+now.toLocaleTimeString();
+  }catch(e){
+    document.getElementById('acceptanceLaunchLog').textContent='刷新验收信息失败：'+String(e);
+    if(badge)badge.textContent='刷新失败';
+  }finally{
+    if(btn)btn.disabled=false;
   }
-  document.getElementById('acceptanceSummary').innerHTML=
-    '当前项目：<b>'+escapeHtml(r.project||'')+'</b><br>'
-    +'路径：'+escapeHtml(r.path||'');
-  document.getElementById('acceptanceFileCount').textContent=r.file_count||0;
-  document.getElementById('acceptanceEntry').textContent=r.entry||'未检测到';
-  document.getElementById('acceptanceScope').textContent=(r.allowed_paths||[]).join(', ')||'只读';
-  document.getElementById('acceptanceTree').textContent=(r.tree||[]).join('\n')||'项目为空。';
-  const hint=document.getElementById('acceptanceRuntimeHint');
-  ACCEPTANCE_RUNTIME_READY=!!r.runtime_manifest;
-  if(r.runtime_manifest){
-    const m=r.runtime_manifest;
-    hint.innerHTML='用户入口：<b>'+escapeHtml(m.entry||'')+'</b>'
-      +(m.type?'<br>类型：'+escapeHtml(m.type):'')
-      +(m.url?'<br>地址：'+escapeHtml(m.url):'');
-  }else{
-    hint.innerHTML='当前只检测到技术入口 <b>'+escapeHtml(r.entry||'无')+'</b>，'
-      +'还没有 docs/runtime.json 用户运行说明。<br>'
-      +'检查路径：'+escapeHtml(r.runtime_manifest_path||'')+'<br>'
-      +(r.pending_candidate_available
-        ? '<b>检测到隔离工作区里已有待验收版本，请点击“发布待验收版本”。</b>'
-        : '这意味着“代码可运行”不等于“你已经能直接使用这个功能”。');
-  }
-  const publishBtn=document.getElementById('publishPendingBtn');
-  if(publishBtn)publishBtn.style.display=r.pending_candidate_available?'inline-block':'none';
-  updateProjectRunButtons(r.runtime_status||{});
 }
 
 function updateProjectRunButtons(s){
@@ -1375,6 +1402,9 @@ class Handler(BaseHTTPRequestHandler):
         raw=json.dumps(data,ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type","application/json; charset=utf-8")
+        self.send_header("Cache-Control","no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma","no-cache")
+        self.send_header("Expires","0")
         self.send_header("Content-Length",str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -1443,32 +1473,63 @@ class Handler(BaseHTTPRequestHandler):
 
             entry="src/main.py" if (project/"src"/"main.py").exists() else ""
             runtime_manifest=None
+            runtime_manifest_error=""
+            runtime_manifest_raw=None
             manifest_path=project/"docs"/"runtime.json"
             if manifest_path.exists():
                 try:
-                    raw=json.loads(manifest_path.read_text(encoding="utf-8"))
-                    manifest_entry=str(raw.get("entry") or "").strip().replace("\\","/")
-                    manifest_type=str(raw.get("type") or "").strip().lower()
-                    manifest_url=str(raw.get("url") or "").strip()
-                    if (
-                        manifest_entry
-                        and not Path(manifest_entry).is_absolute()
-                        and ".." not in Path(manifest_entry).parts
-                        and any(manifest_entry==a or manifest_entry.startswith(a.rstrip("/")+"/") for a in allowed)
-                        and manifest_entry.lower().endswith(".py")
+                    runtime_manifest_raw=json.loads(manifest_path.read_text(encoding="utf-8"))
+                    raw=runtime_manifest_raw if isinstance(runtime_manifest_raw,dict) else {}
+
+                    manifest_entry=str(
+                        raw.get("entry")
+                        or raw.get("entrypoint")
+                        or raw.get("script")
+                        or raw.get("main")
+                        or ""
+                    ).strip().replace("\\","/")
+                    manifest_type=str(
+                        raw.get("type")
+                        or raw.get("mode")
+                        or raw.get("kind")
+                        or ""
+                    ).strip().lower()
+                    manifest_url=str(
+                        raw.get("url")
+                        or raw.get("local_url")
+                        or raw.get("address")
+                        or ""
+                    ).strip()
+
+                    problems=[]
+                    if not manifest_entry:
+                        problems.append("缺少 entry（也兼容 entrypoint/script/main）")
+                    elif Path(manifest_entry).is_absolute() or ".." in Path(manifest_entry).parts:
+                        problems.append("entry 必须是项目内相对路径")
+                    elif not any(
+                        manifest_entry==a or manifest_entry.startswith(a.rstrip("/")+"/")
+                        for a in allowed
                     ):
-                        if manifest_url and not (
-                            manifest_url.startswith("http://127.0.0.1:")
-                            or manifest_url.startswith("http://localhost:")
-                        ):
-                            manifest_url=""
+                        problems.append("entry 不在授权目录 src/tests/docs 内")
+                    elif not manifest_entry.lower().endswith(".py"):
+                        problems.append("当前启动器只允许 Python .py 入口")
+
+                    if manifest_url and not (
+                        manifest_url.startswith("http://127.0.0.1:")
+                        or manifest_url.startswith("http://localhost:")
+                    ):
+                        problems.append("url 只允许 localhost 或 127.0.0.1")
+
+                    if not problems:
                         runtime_manifest={
                             "entry":manifest_entry,
-                            "type":manifest_type if manifest_type in {"web","cli"} else "cli",
+                            "type":manifest_type if manifest_type in {"web","cli"} else ("web" if manifest_url else "cli"),
                             "url":manifest_url,
                         }
-                except Exception:
-                    runtime_manifest=None
+                    else:
+                        runtime_manifest_error="；".join(problems)
+                except Exception as exc:
+                    runtime_manifest_error=f"runtime.json 不是有效 JSON：{exc}"
 
             proc=PROJECT_APP.get("process")
             running=bool(proc is not None and proc.poll() is None)
@@ -1489,6 +1550,8 @@ class Handler(BaseHTTPRequestHandler):
                 "runtime_manifest":runtime_manifest,
                 "runtime_manifest_path":str(manifest_path),
                 "runtime_manifest_exists":manifest_path.exists(),
+                "runtime_manifest_error":runtime_manifest_error,
+                "runtime_manifest_raw":runtime_manifest_raw,
                 "runtime_status":runtime_status,
                 "allowed_paths":allowed,
                 "mode":config.get("mode"),
