@@ -293,27 +293,11 @@ class DynamicTeamRun:
             self.workspace.mkdir(parents=True, exist_ok=True)
 
     def apply_real_project_changes(self):
-        if not self.use_real_project:
-            return []
-
-        mode = self.state.get("project_mode")
-        if mode == "read_only":
-            self.event("权限控制器", "只读模式：不向真实项目写回任何文件")
-            return []
-
-        if mode != "scoped_write":
-            raise RuntimeError(f"不支持的真实项目权限模式：{mode}")
-
-        allowed = self.state.get("allowed_paths", [])
-        if not allowed:
-            raise RuntimeError("scoped_write 未配置允许修改目录")
-
-        synced = sync_allowed_paths(self.workspace, self.real_project, allowed)
-        self.event("权限控制器", "已将授权目录变更同步回真实项目", {
-            "synced_paths": synced,
-            "git_commit": False,
-        })
-        return synced
+        """Deprecated dangerous whole-directory sync; never called by the team runner."""
+        raise RuntimeError(
+            "整目录同步已禁用：会删除 src/data 等历史数据。"
+            "请先完成独立 QA 和测试，再从控制台查看文件差异并人工确认安全发布。"
+        )
 
     def save(self):
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -769,25 +753,27 @@ class DynamicTeamRun:
             if (
                 decision_type == "user_acceptance"
                 and self.use_real_project
+                and self.state.get("project_mode") == "scoped_write"
                 and test_evidence.get("returncode") == 0
             ):
-                synced = self.apply_real_project_changes()
-                self.state["pending_human_acceptance"] = True
-                self.state["candidate_synced"] = True
-                self.state["status"] = "等待人工验收"
-                self.event("权限控制器", "已发布待人工验收版本", {
-                    "synced_paths": synced,
-                    "note": "自动测试已通过，仅等待真实用户操作验收。"
+                # QA pass is permission to PREVIEW, not permission to write.
+                # Publishing happens only through SHA review + backup + user click.
+                self.state["qa_passed"] = True
+                self.state["pending_human_acceptance"] = False
+                self.state["candidate_synced"] = False
+                self.state["status"] = "复核通过（待安全发布）"
+                self.event("权限控制器","通过自动测试，等待安全发布预览与确认",{
+                    "synced_paths": [],
+                    "note": "尚未写入真实项目，真实数据保留；请先预览差异。"
                 })
-                self.event("项目协调智能体", "请项目负责人进行真实操作验收", {
-                    "reason": reason,
-                    "decision_type": "user_acceptance"
+                self.event("项目协调智能体","请先安全发布，再进行浏览器人工验收",{
+                    "reason": reason,"decision_type":decision_type
                 })
             else:
                 self.state["status"] = "等待人工决策"
-                self.event("项目协调智能体", "升级给项目负责人", {
+                self.event("项目协调智能体","升级给项目负责人",{
                     "reason": reason,
-                    "decision_type": decision_type or "owner_decision"
+                    "decision_type":decision_type or "owner_decision",
                 })
         elif review and review.get("status") == "rework":
             self.state["status"] = "等待人工决策"
@@ -800,9 +786,22 @@ class DynamicTeamRun:
         elif review and review.get("status") not in (None, "pass"):
             self.state["status"] = "等待人工决策"
             self.event("项目协调智能体", "测试结论结构异常，升级人工确认", review)
+        elif self.use_real_project and self.state.get("project_mode") == "scoped_write":
+            if review and review.get("status") == "pass" and test_evidence.get("returncode") == 0:
+                self.state["qa_passed"] = True
+                self.state["candidate_synced"] = False
+                self.state["status"] = "复核通过（待安全发布）"
+                self.event("权限控制器","QA/自动测试通过，候选代码仍在隔离区",{
+                    "synced_paths":[],
+                    "next_action":"查看差异并人工确认安全发布",
+                })
+            else:
+                self.state["status"] = "等待人工决策"
+                self.event("权限控制器","自动测试或独立 QA 证据不足，禁止发布",{
+                    "tests_returncode":test_evidence.get("returncode"),
+                    "qa_status":review.get("status") if review else "missing",
+                })
         else:
-            if self.use_real_project:
-                self.apply_real_project_changes()
             self.state["status"] = "已完成"
 
         self.state["current_agent"] = ""
