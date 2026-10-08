@@ -833,7 +833,9 @@ async function refreshAcceptance(){
       const m=r.runtime_manifest;
       hint.innerHTML='✅ 已识别用户入口：<b>'+escapeHtml(m.entry||'')+'</b>'
         +(m.type?'<br>类型：'+escapeHtml(m.type):'')
-        +(m.url?'<br>地址：'+escapeHtml(m.url):'')
+        +(m.url?'<br>配置地址：'+escapeHtml(m.url):'')
+        +(r.runtime_status&&r.runtime_status.running&&r.runtime_status.url
+          ?'<br><b>当前实际地址：'+escapeHtml(r.runtime_status.url)+'</b>':'')
         +(m.launch_entry&&m.launch_entry!==m.entry?'<br>实际启动：'+escapeHtml(m.launch_entry):'')
         +(m.note?'<br>'+escapeHtml(m.note):'')
         +'<br>runtime.json：'+escapeHtml(r.runtime_manifest_path||'');
@@ -912,6 +914,11 @@ async function launchAcceptedProject(){
   updateProjectRunButtons(r.status||{});
   log.textContent=r.log||'工作台启动成功。';
   if(r.status&&r.status.url){
+    const hint=document.getElementById('acceptanceRuntimeHint');
+    if(r.temporary_port_override){
+      hint.innerHTML+='<p><b>已自动避开端口占用，本次实际打开：'
+        +escapeHtml(r.status.url)+'</b>（未修改项目文件）</p>';
+    }
     window.open(r.status.url,'_blank');
   }else{
     alert('项目已启动，但当前入口不是可直接打开的网页。');
@@ -1849,18 +1856,32 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok":False,"error":"工作台已经在运行"},409)
                     return
 
+                # 只对 Python Web 服务进行无文件修改的临时端口迁移。
+                # 绝不触碰占用原端口的程序，也不直接更改项目源码/清单。
+                effective_url=url
+                port_override=None
+                original_port=None
                 if kind=="web" and url:
                     import socket
-                    port=urlparse(url).port
+                    parsed_url=urlparse(url)
+                    original_port=parsed_url.port
                     with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as sock:
                         sock.settimeout(0.4)
-                        if sock.connect_ex(("127.0.0.1",port))==0:
+                        occupied=sock.connect_ex(("127.0.0.1",original_port))==0
+                    if occupied:
+                        if launcher!="python":
                             self._json({
                                 "ok":False,
-                                "error":f"本机 {port} 端口已经被占用，不能安全启动工作台。请让开发智能体更改工作台端口，并更新 docs/runtime.json。",
-                                "log":f"地址：{url}；未启动新进程，也未关闭原有程序。"
+                                "error":f"端口 {original_port} 已被占用；当前启动入口不支持安全自动换端口。",
+                                "log":"没有改动原项目，也没有停止占用端口的程序。"
                             },409)
                             return
+                        with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as free_sock:
+                            free_sock.bind(("127.0.0.1",0))
+                            port_override=free_sock.getsockname()[1]
+                        effective_url=parsed_url._replace(
+                            netloc=f"127.0.0.1:{port_override}"
+                        ).geturl()
 
                 creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0) if os.name=="nt" else 0
                 log_dir=ROOT/"orchestrator_v1"/"runtime"/"project_app"
@@ -1876,7 +1897,17 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
                 if launcher=="python":
-                    argv=[sys.executable,"-u",str(launch_path)]
+                    if port_override is not None:
+                        runner=Path(__file__).resolve().parent/"port_runner.py"
+                        if not runner.is_file():
+                            self._json({"ok":False,"error":"缺少临时端口启动器 port_runner.py"},500)
+                            return
+                        argv=[
+                            sys.executable,"-u",str(runner),
+                            str(launch_path),str(original_port),str(port_override)
+                        ]
+                    else:
+                        argv=[sys.executable,"-u",str(launch_path)]
                 else:
                     powershell=shutil.which("powershell.exe")
                     if not powershell:
@@ -1898,7 +1929,7 @@ class Handler(BaseHTTPRequestHandler):
                 PROJECT_APP.update({
                     "process":proc,
                     "entry":rel,
-                    "url":url if kind=="web" else "",
+                    "url":effective_url if kind=="web" else "",
                     "started_at":time.time(),
                     "log_file":str(log_file),
                 })
@@ -1909,11 +1940,11 @@ class Handler(BaseHTTPRequestHandler):
                 while time.time()<deadline:
                     if proc.poll() is not None:
                         break
-                    if kind!="web" or not url:
+                    if kind!="web" or not effective_url:
                         ready=True
                         break
                     try:
-                        with urllib.request.urlopen(url,timeout=1) as resp:
+                        with urllib.request.urlopen(effective_url,timeout=1) as resp:
                             if 200 <= resp.status < 500:
                                 ready=True
                                 break
@@ -1942,7 +1973,7 @@ class Handler(BaseHTTPRequestHandler):
                     },500)
                     return
 
-                if kind=="web" and url and not ready:
+                if kind=="web" and effective_url and not ready:
                     try:
                         proc.terminate()
                     except Exception:
@@ -1950,8 +1981,8 @@ class Handler(BaseHTTPRequestHandler):
                     PROJECT_APP.update({"process":None,"entry":"","url":"","started_at":None})
                     self._json({
                         "ok":False,
-                        "error":"工作台进程仍在，但 8 秒内无法访问本地网页。可能是端口、绑定地址或启动方式有问题。",
-                        "log":(log_text+"\n"+last_error).strip()
+                        "error":"工作台已尝试启动，但 8 秒内没有在指定本地地址就绪。",
+                        "log":(f"本次检查地址：{effective_url}\n"+log_text+"\n"+last_error).strip()
                     },500)
                     return
 
@@ -1959,7 +1990,14 @@ class Handler(BaseHTTPRequestHandler):
                     "ok":True,
                     "status":{"running":True,"entry":rel,"url":PROJECT_APP.get("url","")},
                     "actual_launch_entry":launch_rel,
-                    "log":log_text or "工作台进程已启动并通过本地访问检查。"
+                    "temporary_port_override":port_override,
+                    "log":(
+                        (f"检测到 {original_port} 端口冲突，已临时改用 {port_override}。\n"
+                         f"实际打开地址：{effective_url}\n"
+                         "没有修改真实项目文件，也没有关闭其他程序。\n"
+                         if port_override is not None else "")
+                        + (log_text or "工作台进程已启动并通过本地访问检查。")
+                    )
                 })
             except Exception as exc:
                 self._json({"ok":False,"error":str(exc)},500)
