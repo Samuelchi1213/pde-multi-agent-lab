@@ -883,3 +883,17 @@ UI 修复：
   - allowed_paths
   - synced_paths
 - 验收中心启动日志区域显示发布诊断
+
+
+## 2026-10-08｜验收中心状态缓存修复
+
+现象：
+- “发布待验收版本”后，启动日志确认 D:\辅导员工作台_v2\docs\runtime.json 已真实写入。
+- 但验收中心仍显示“缺少 runtime.json”，并继续显示发布按钮。
+- 说明后端写入成功，但前端读取到旧的验收结果。
+
+修复：
+- 前端 fetch 默认 cache=no-store
+- 所有 JSON API 响应增加 Cache-Control: no-store/no-cache
+- 验收中心刷新请求增加时间戳 cache-buster
+- 发布成功后强制重新读取真实项目磁盘状态
