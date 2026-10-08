@@ -441,3 +441,13 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 | M6.15-002 | 发布失败显示 staging/target 诊断 | DONE |
 | M6.15-003 | 验收中心显示实际 runtime.json 检查路径 | DONE |
 | M6.15-004 | 定位当前 runtime.json 未落盘原因 | TODO |
+
+
+## Milestone 6.16｜验收状态缓存修复
+
+| ID | 任务 | 状态 |
+|---|---|---|
+| M6.16-001 | 前端 API 请求默认 no-store | DONE |
+| M6.16-002 | 后端 JSON 响应禁止缓存 | DONE |
+| M6.16-003 | 验收刷新增加 cache-buster | DONE |
+| M6.16-004 | 验证 runtime.json 写入后立即可见 | TODO |
