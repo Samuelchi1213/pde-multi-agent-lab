@@ -203,6 +203,17 @@ def save_project_connection(config):
     )
 
 
+def save_validation_draft(draft_id, draft):
+    """Persist offline verification context for safe read-only inspection after restart."""
+    if not draft_id.startswith(("VALIDATE-REWORK-", "VALIDATE-BUDGET-")):
+        raise ValueError("非系统验证任务不得使用验证草案存储")
+    if not isinstance(draft, dict) or not isinstance(draft.get("analysis"), dict):
+        raise ValueError("验证草案不完整，拒绝保存")
+    drafts_dir=ROOT/"orchestrator_v1"/"runtime"/"drafts"
+    drafts_dir.mkdir(parents=True,exist_ok=True)
+    atomic_write_json(drafts_dir/f"{draft_id}.json",draft)
+
+
 def load_saved_drafts():
     drafts_dir=ROOT/"orchestrator_v1"/"runtime"/"drafts"
     if not drafts_dir.exists():
