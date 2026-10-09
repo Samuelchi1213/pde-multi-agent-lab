@@ -1814,6 +1814,18 @@ async function previewRecoverySteps(){
       '处理建议：'+r.next_action,
     ];
     if(r.blockers?.length)lines.push('','注意事项：',...r.blockers.map(x=>'· '+x));
+    const sim=r.offline_simulation;
+    if(sim){
+      lines.push('','B4-A 阶段恢复离线演练（仅模拟，不会执行）',
+        '演练结果：'+(sim.status==='simulated'?'已生成假设路径':'安全阻断'),
+        '真实模型调用：0；真实项目写入：0；自动续跑授权：无');
+      if(sim.status==='simulated'){
+        lines.push('拟从阶段：'+sim.start_step,
+          '有证据可复用：'+(sim.reused_steps||[]).join(' → '),
+          '仅模拟未执行：'+(sim.simulated_steps||[]).join(' → '));
+      }
+      if(sim.blockers?.length)lines.push('演练停止原因：',...sim.blockers.map(x=>'· '+x));
+    }
     output.textContent=lines.join('\n');
   }catch(e){
     output.textContent='无法完成恢复预览：'+String(e);
