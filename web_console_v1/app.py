@@ -791,8 +791,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
       当前安全范围：等待任务启动。
     </div>
     <button id="executeBtn" onclick="startTeamExecution()" style="background:#7c3aed">启动团队执行</button><button id="inspectInterruptedBtn" style="display:none" onclick="inspectInterruptedTask()">诊断本次中断（只读）</button>
+    <button id="recoveryPreviewBtn" style="display:none;background:#475569" onclick="previewRecoverySteps()">查看逐步骤恢复预览（只读）</button>
     <button id="resumeQaOnlyBtn" style="display:none;background:#166534" onclick="resumeQaOnly()">仅恢复测试复核（需授权 DeepSeek）</button>
     <span id="executeBadge" class="badge">等待草案确认</span>
+    <pre id="recoveryPreviewDetails" style="white-space:pre-wrap;display:none;max-height:350px;overflow:auto"></pre>
     <div id="manualReworkPanel" class="card human" style="display:none;margin-top:14px">
       <h4>人工验收退回 · Codex 定向返工</h4>
       <p>已保留本轮已发布代码和原始数据。本次仅修复历史记录查询、日期校验、默认不关闭异常。</p>
@@ -1778,6 +1780,33 @@ async function confirmSafePublish(){
   }
 }
 
+async function previewRecoverySteps(){
+  if(!CURRENT_DRAFT_ID){alert('请先选择已保存的任务。');return;}
+  const b=document.getElementById('recoveryPreviewBtn');
+  const output=document.getElementById('recoveryPreviewDetails');
+  b.disabled=true;
+  output.style.display='block';
+  output.textContent='正在核对历史回执、工作区快照和未完成步骤；不会调用模型...';
+  try{
+    const r=await api('/api/team/recovery-preview?draft_id='+encodeURIComponent(CURRENT_DRAFT_ID)+'&t='+Date.now());
+    if(!r.ok)throw Error(r.error||'无法读取历史任务');
+    const lines=[
+      '任务：'+r.draft_id,'当前状态：'+r.task_status,
+      '模式：只读检查（不调用模型、不写项目）',
+      '立即自动续跑：禁止（仍需后续安全执行器）',
+      '',
+      ...r.steps.map(x=>(x.status==='verified'?'[已验证] ':x.status==='not_started'?'[未开始] ':'[需检查] ')
+         +x.step_id+' · '+x.agent+'\n    '+x.note),
+      '',
+      '处理建议：'+r.next_action,
+    ];
+    if(r.blockers?.length)lines.push('','注意事项：',...r.blockers.map(x=>'· '+x));
+    output.textContent=lines.join('\n');
+  }catch(e){
+    output.textContent='无法完成恢复预览：'+String(e);
+  }finally{b.disabled=false;}
+}
+
 async function checkFullReliabilitySuite(){
   const btn=document.getElementById('fullReliabilityTestBtn');
   const output=document.getElementById('validationResult');
@@ -1892,6 +1921,8 @@ async function pollTeam(){
     return;
   }
   const s=d.state||{};
+  const recoveryButton=document.getElementById('recoveryPreviewBtn');
+  if(recoveryButton)recoveryButton.style.display=(!d.running && s.status)?'inline-block':'none';
   const manualPanel=document.getElementById('manualReworkPanel');
   if(manualPanel)manualPanel.style.display=
     (!d.running && s.status==='需要人工返工')?'block':'none';
@@ -2095,6 +2126,7 @@ class Handler(BaseHTTPRequestHandler):
                     "test_model_call_checkpoints",
                     "test_codex_checkpoints",
                     "test_safe_staging_and_release",
+                    "test_recovery_preview",
                 ]
                 proc=subprocess.run(
                     [sys.executable,"-m","unittest",*suites,"-v"],
@@ -2107,7 +2139,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=73  # 13 state + 18 steps + 12 DeepSeek + 23 Codex + 7 safety
+                expected=90  # 73 B2 baseline + 17 B3 read-only recovery cases
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
@@ -2494,6 +2526,33 @@ class Handler(BaseHTTPRequestHandler):
                 )
             }
             self._json(result)
+            return
+
+        if parsed.path=="/api/team/recovery-preview":
+            from recovery_preview import build_recovery_preview, VALID_DRAFT_ID
+            draft_id=parse_qs(parsed.query).get("draft_id",[""])[0]
+            if not VALID_DRAFT_ID.fullmatch(draft_id):
+                self._json({"ok":False,"error":"任务编号无效"},400)
+                return
+            run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
+            with LOCK:
+                meta=dict(TEAM_RUNS.get(draft_id) or {})
+            projected=project_team_status(run_dir/"state.json",meta)
+            draft=ANALYSES.get(draft_id)
+            if not draft:
+                draft_path=ROOT/"orchestrator_v1"/"runtime"/"drafts"/f"{draft_id}.json"
+                if draft_path.is_file():
+                    try:
+                        draft=json.loads(draft_path.read_text(encoding="utf-8"))
+                    except (ValueError,OSError):
+                        draft=None
+            try:
+                preview=build_recovery_preview(
+                    run_dir,draft,projected["state"],running=projected["running"]
+                )
+                self._json(preview)
+            except (ValueError,TypeError,OSError) as exc:
+                self._json({"ok":False,"error":"任务恢复预览无法完成："+str(exc)},409)
             return
 
         if parsed.path=="/api/team/status":
