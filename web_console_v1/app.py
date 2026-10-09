@@ -207,7 +207,9 @@ def load_saved_drafts():
     drafts_dir=ROOT/"orchestrator_v1"/"runtime"/"drafts"
     if not drafts_dir.exists():
         return
-    for p in sorted(drafts_dir.glob("DRAFT-*.json")):
+    for p in sorted(drafts_dir.glob("*.json")):
+        if not p.stem.startswith(("DRAFT-", "VALIDATE-REWORK-", "VALIDATE-BUDGET-")):
+            continue
         try:
             data=json.loads(p.read_text(encoding="utf-8"))
             draft_id=p.stem
