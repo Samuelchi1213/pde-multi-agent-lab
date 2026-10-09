@@ -169,5 +169,42 @@ class TestRecoveryPreview(unittest.TestCase):
         self.assertFalse(result["can_resume_now"])
 
 
+    def test_legacy_validation_draft_missing_after_restart_is_read_only(self):
+        legacy = self.root / "VALIDATE-REWORK-1700000000"
+        self.run.rename(legacy)
+        self.run = legacy
+        self.workspace = legacy / "workspace"
+        self.state["draft_id"] = legacy.name
+        self.save_state()
+        self.draft = None
+        before = set(self.run.rglob("*"))
+        result = self.preview()
+        self.assertEqual(before, set(self.run.rglob("*")))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["steps"], [])
+        self.assertTrue(any("系统回归验证" in item for item in result["blockers"]))
+        self.assertFalse(result["can_resume_now"])
+        self.assertFalse(result["resume_authorized"])
+
+    def test_normal_history_with_missing_draft_is_blocked_without_invention(self):
+        self.draft = None
+        result = self.preview()
+        self.assertEqual(result["steps"], [])
+        self.assertTrue(any("原始任务草案" in item for item in result["blockers"]))
+        self.assertFalse(result["resume_authorized"])
+
+    def test_malformed_agent_roster_does_not_fabricate_paid_steps(self):
+        self.draft["analysis"]["required_agents"] = "开发智能体"
+        result = self.preview()
+        self.assertEqual(result["steps"], [])
+        self.assertTrue(result["blockers"])
+        self.assertFalse(result["can_resume_now"])
+
+    def test_invalid_history_state_is_still_rejected(self):
+        self.state = []
+        with self.assertRaises(ValueError):
+            self.preview()
+
+
 if __name__=="__main__":
     unittest.main()
