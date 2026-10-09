@@ -1049,3 +1049,11 @@ UI 修复：
 - 新增 7 项上述发布/隐私回归测试；“开发 / 诊断工具”新增**一键综合验收（全部离线）**：13 + 18 + 12 + 23 + 7 = 73 项。
 - 实施日志：[docs/PDE_M7_003_B2_CODEX_AND_SAFE_RELEASE.md](docs/PDE_M7_003_B2_CODEX_AND_SAFE_RELEASE.md)。
 - **状态：GitHub 已提交，73 项测试待用户明早 Windows 执行。绝不将其宣称为真实断点自动续跑或付费试运行通过。**
+
+
+## 2026-10-09｜M7-003 B2 Windows 验收通过；B3 逐步骤只读恢复预览提交
+- 项目负责人在 PDE Windows 控制台截图验证一键综合自检通过：Ran 73 tests / OK（skipped=1：Windows 无符号链接创建权限），退出码0；外部模型请求和真实项目写入均为无。
+- B3 新增 `web_console_v1/recovery_preview.py`，依据任务状态、各步骤回执与 Codex 工作区快照只读判断 verified / not_started / blocked，识别旧任务、已发布任务、预算待审批、正在运行或结果不确定的状态。
+- 新增 `web_console_v1/test_recovery_preview.py` 17项本地测试、`/api/team/recovery-preview` 和“查看逐步骤恢复预览（只读）”按钮；综合测试更新为 90 项，Windows 待运行。
+- **不增加实际付费模型调用，不启用自动断点续跑。** 下一阶段须做阶段执行器、预算授权和重复点击/中断模拟测试，才能开放真实续跑。
+- 文档：[docs/PDE_M7_003_B3_RECOVERY_PREVIEW.md](docs/PDE_M7_003_B3_RECOVERY_PREVIEW.md)。
