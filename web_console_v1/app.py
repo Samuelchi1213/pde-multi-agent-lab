@@ -3095,6 +3095,11 @@ class Handler(BaseHTTPRequestHandler):
                     "next_action":"执行回归验证"
                 }
             }
+            try:
+                save_validation_draft(draft_id,draft)
+            except (OSError,ValueError,TypeError) as exc:
+                self._json({"ok":False,"error":"无法安全保存验证草案："+str(exc)},500)
+                return
             ANALYSES[draft_id]=draft
             with LOCK:
                 TEAM_RUNS[draft_id]={"running":True,"state":{"status":"准备中","timeline":[]}}
