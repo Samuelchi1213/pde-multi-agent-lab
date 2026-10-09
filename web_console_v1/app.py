@@ -2564,6 +2564,10 @@ class Handler(BaseHTTPRequestHandler):
                 preview=build_recovery_preview(
                     run_dir,draft,projected["state"],running=projected["running"]
                 )
+                # B4-A is an in-memory simulation only: no worker, no model,
+                # no checkpoint mutation and no permission to resume.
+                from offline_stage_recovery import simulate_stage_recovery
+                preview["offline_simulation"]=simulate_stage_recovery(preview)
                 self._json(preview)
             except (ValueError,TypeError,OSError) as exc:
                 self._json({"ok":False,"error":"任务恢复预览无法完成："+str(exc)},409)
