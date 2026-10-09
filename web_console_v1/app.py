@@ -2167,6 +2167,7 @@ class Handler(BaseHTTPRequestHandler):
                     "test_validation_draft_persistence",
                     "test_offline_stage_recovery",
                     "test_offline_stage_recovery_integration",
+                    "test_stage_resume_preflight",
                 ]
                 proc=subprocess.run(
                     [sys.executable,"-m","unittest",*suites,"-v"],
@@ -2179,7 +2180,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=122  # 97 B3.1 accepted + 21 pure B4-A + 4 B3/B4 evidence integration checks
+                expected=136  # 122 B4-A accepted + 14 B4-B0 original evidence/read-only preflight checks
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
