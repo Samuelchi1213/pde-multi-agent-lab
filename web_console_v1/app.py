@@ -1815,6 +1815,18 @@ async function previewRecoverySteps(){
     ];
     if(r.blockers?.length)lines.push('','注意事项：',...r.blockers.map(x=>'· '+x));
     const sim=r.offline_simulation;
+    const preflight=r.resume_preflight;
+    if(preflight){
+      lines.push('','B4-B0 原始任务恢复资格审查（只读）',
+        '检查结果：'+(preflight.status==='review_candidate'?'可以进入人工评审（不等于批准执行）':'安全阻断'),
+        '真实模型调用：0；真实项目写入：0；自动续跑授权：无');
+      if(preflight.status==='review_candidate'){
+        lines.push('假设下一阶段：'+preflight.next_step,
+          '已核对前缀：'+(preflight.verified_prefix||[]).join(' → '),
+          '下一步仍需负责人专项审批，并重新核验全部原始证据');
+      }
+      if(preflight.blockers?.length)lines.push('资格审查停止原因：',...preflight.blockers.map(x=>'· '+x));
+    }
     if(sim){
       lines.push('','B4-A 阶段恢复离线演练（仅模拟，不会执行）',
         '演练结果：'+(sim.status==='simulated'?'已生成假设路径':'安全阻断'),
@@ -2582,6 +2594,10 @@ class Handler(BaseHTTPRequestHandler):
                 # no checkpoint mutation and no permission to resume.
                 from offline_stage_recovery import simulate_stage_recovery
                 preview["offline_simulation"]=simulate_stage_recovery(preview)
+                from stage_resume_preflight import build_resume_preflight
+                preview["resume_preflight"]=build_resume_preflight(
+                    run_dir,running=projected["running"]
+                )
                 self._json(preview)
             except (ValueError,TypeError,OSError) as exc:
                 self._json({"ok":False,"error":"任务恢复预览无法完成："+str(exc)},409)
