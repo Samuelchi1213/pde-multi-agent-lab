@@ -113,23 +113,52 @@ def _stage(run_dir: Path, workspace: Path, step_id: str, agent: str,
     return item
 
 
+def _unavailable_draft_preview(draft_id: str, status: str, reason: str) -> dict[str, Any]:
+    """Fail closed for old runs with no trustworthy original agent roster."""
+    blockers = [
+        reason + "；无法核实原任务的智能体名单及步骤调用，禁止推断或重跑。"
+    ]
+    if draft_id.startswith("VALIDATE-"):
+        blockers.append(
+            "该任务属于系统回归验证；旧版验证草案可能只保存在进程内存中。"
+            "不得按历史计数补造检查点或启动付费模型。"
+        )
+    return {
+        "ok": True,
+        "draft_id": draft_id,
+        "task_status": status,
+        "mode": "read_only_no_model_calls",
+        "can_resume_now": False,
+        "resume_authorized": False,
+        "steps": [],
+        "verified_steps": [],
+        "not_started_steps": [],
+        "blocked_steps": [],
+        "blockers": blockers,
+        "next_action": "保留原始状态、回执及隔离工作区，人工核实草案来源；不得直接续跑或重启整队。",
+    }
+
+
 def build_recovery_preview(run_dir: Path, draft: dict[str, Any],
                            state: dict[str, Any], *, running: bool = False) -> dict[str, Any]:
     """Diagnostic ONLY. No result here is authorization to run a model."""
     run_dir = Path(run_dir)
+    if not isinstance(state, dict):
+        raise ValueError("历史状态格式不正确")
     draft_id = str(state.get("draft_id") or run_dir.name)
     if not VALID_DRAFT_ID.fullmatch(draft_id) or run_dir.name != draft_id:
         raise ValueError("任务 ID 不符合安全读取规则")
     if not run_dir.is_dir() or not (run_dir / "state.json").is_file():
         raise ValueError("历史任务记录不存在")
-    if not isinstance(draft, dict) or not isinstance(state, dict):
-        raise ValueError("草案或历史状态格式不正确")
+
+    status = str(state.get("status") or "")
+    if not isinstance(draft, dict):
+        return _unavailable_draft_preview(draft_id, status, "原始任务草案不存在或无法读取")
     analysis = draft.get("analysis")
     team = analysis.get("required_agents") if isinstance(analysis, dict) else None
     if not isinstance(team, list) or any(not isinstance(x, str) for x in team):
-        raise ValueError("历史任务智能体名单不完整")
+        return _unavailable_draft_preview(draft_id, status, "原始任务智能体名单不完整或格式错误")
 
-    status = str(state.get("status") or "")
     note = []
     if running:
         note.append("后台仍有运行线程，不能同时恢复")
