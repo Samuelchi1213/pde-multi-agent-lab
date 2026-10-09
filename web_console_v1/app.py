@@ -3142,6 +3142,11 @@ class Handler(BaseHTTPRequestHandler):
                     "needs_owner_decision":True
                 }
             }
+            try:
+                save_validation_draft(draft_id,draft)
+            except (OSError,ValueError,TypeError) as exc:
+                self._json({"ok":False,"error":"无法安全保存验证草案："+str(exc)},500)
+                return
             ANALYSES[draft_id]=draft
             run_dir=ROOT/"orchestrator_v1"/"dynamic_runs"/draft_id
             run_dir.mkdir(parents=True,exist_ok=True)
