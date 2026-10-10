@@ -132,6 +132,8 @@ class MockApprovalBook:
                     or current_scope.get("status") != "mock_review_candidate"
                     or current_scope.get("mode") != "mock_approval_scope_read_only"
                     or current_scope.get("resume_authorized") is not False
+                    or current_scope.get("can_resume_now") is not False
+                    or current_scope.get("blockers") != []
                     or current_scope.get("draft_id") != record["draft"]
                     or current_scope.get("step_id") != record["step"]
                     or current_scope.get("evidence_binding") != record["evidence"]):
