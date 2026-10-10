@@ -1815,6 +1815,17 @@ async function previewRecoverySteps(){
     ];
     if(r.blockers?.length)lines.push('','注意事项：',...r.blockers.map(x=>'· '+x));
     const sim=r.offline_simulation;
+    const approval=r.mock_approval_scope;
+    if(approval){
+      lines.push('','B4-B2 逐步骤模拟审批资格（只读，无实际审批）',
+        '审批资格：'+(approval.status==='mock_review_candidate'?'可进行离线模拟审批（不代表真实授权）':'安全阻断'),
+        '真实模型调用：0；真实项目写入：0；自动续跑授权：无');
+      if(approval.status==='mock_review_candidate'){
+        lines.push('任务：'+approval.draft_id,'候选步骤：'+approval.step_id,
+          '仅为证据绑定范围展示；没有创建或签发任何真实审批');
+      }
+      if(approval.blockers?.length)lines.push('模拟审批阻断原因：',...approval.blockers.map(x=>'· '+x));
+    }
     const mock=r.mock_runner_preview;
     if(mock){
       lines.push('','B4-B1 阶段假执行器（仅离线测试，不会运行）',
@@ -2613,6 +2624,10 @@ class Handler(BaseHTTPRequestHandler):
                     preview["mock_runner_preview"]=describe_mock_runner(preview["offline_simulation"])
                 else:
                     preview["mock_runner_preview"]=describe_mock_runner(None)
+                from mock_approval_contract import describe_mock_approval_scope
+                preview["mock_approval_scope"]=describe_mock_approval_scope(
+                    preview["resume_preflight"],preview["mock_runner_preview"]
+                )
                 self._json(preview)
             except (ValueError,TypeError,OSError) as exc:
                 self._json({"ok":False,"error":"任务恢复预览无法完成："+str(exc)},409)
