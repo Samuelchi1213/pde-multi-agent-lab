@@ -1815,6 +1815,13 @@ async function previewRecoverySteps(){
     ];
     if(r.blockers?.length)lines.push('','注意事项：',...r.blockers.map(x=>'· '+x));
     const sim=r.offline_simulation;
+    const mock=r.mock_runner_preview;
+    if(mock){
+      lines.push('','B4-B1 阶段假执行器（仅离线测试，不会运行）',
+        '假执行资格：'+(mock.status==='ready_fake_only'?'可运行本地模拟（不代表真实授权）':'安全阻断'),
+        '真实模型调用：0；真实项目写入：0；自动续跑授权：无');
+      if(mock.blockers?.length)lines.push('阻断原因：',...mock.blockers.map(x=>'· '+x));
+    }
     const preflight=r.resume_preflight;
     if(preflight){
       lines.push('','B4-B0 原始任务恢复资格审查（只读）',
@@ -2599,6 +2606,11 @@ class Handler(BaseHTTPRequestHandler):
                 preview["resume_preflight"]=build_resume_preflight(
                     run_dir,running=projected["running"]
                 )
+                from mock_stage_runner import describe_mock_runner
+                if preview["resume_preflight"]["status"] == "review_candidate":
+                    preview["mock_runner_preview"]=describe_mock_runner(preview["offline_simulation"])
+                else:
+                    preview["mock_runner_preview"]=describe_mock_runner(None)
                 self._json(preview)
             except (ValueError,TypeError,OSError) as exc:
                 self._json({"ok":False,"error":"任务恢复预览无法完成："+str(exc)},409)
