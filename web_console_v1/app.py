@@ -1815,6 +1815,14 @@ async function previewRecoverySteps(){
     ];
     if(r.blockers?.length)lines.push('','注意事项：',...r.blockers.map(x=>'· '+x));
     const sim=r.offline_simulation;
+    const faults=r.fault_readiness;
+    if(faults){
+      lines.push('','B4-C1 离线异常恢复安全审计（只读）',
+        '真实续跑准备状态：未开放',
+        '离线故障场景数量：'+faults.offline_scenarios,
+        '真实模型调用：0；真实项目写入：0；自动续跑授权：无',
+        '后续检查：'+faults.reason);
+    }
     const approval=r.mock_approval_scope;
     if(approval){
       lines.push('','B4-B2 逐步骤模拟审批资格（只读，无实际审批）',
@@ -2189,6 +2197,7 @@ class Handler(BaseHTTPRequestHandler):
                     "test_mock_stage_runner",
                     "test_mock_stage_lease",
                     "test_mock_approval_contract",
+                    "test_offline_fault_injection",
                 ]
                 proc=subprocess.run(
                     [sys.executable,"-m","unittest",*suites,"-v"],
@@ -2201,7 +2210,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=180  # 160 B4-B1 accepted + 20 B4-B2 mock approval contract checks
+                expected=200  # 180 B4-B2 accepted + 20 B4-C1 isolated fault injection checks
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
@@ -2629,6 +2638,8 @@ class Handler(BaseHTTPRequestHandler):
                 preview["mock_approval_scope"]=describe_mock_approval_scope(
                     preview["resume_preflight"],preview["mock_runner_preview"]
                 )
+                from offline_fault_injection import summarize_fault_readiness
+                preview["fault_readiness"]=summarize_fault_readiness(preview["mock_approval_scope"])
                 self._json(preview)
             except (ValueError,TypeError,OSError) as exc:
                 self._json({"ok":False,"error":"任务恢复预览无法完成："+str(exc)},409)
