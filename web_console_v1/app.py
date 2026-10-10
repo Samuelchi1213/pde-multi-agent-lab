@@ -2175,6 +2175,7 @@ class Handler(BaseHTTPRequestHandler):
                     "test_offline_stage_recovery",
                     "test_offline_stage_recovery_integration",
                     "test_stage_resume_preflight",
+                    "test_mock_stage_runner",
                 ]
                 proc=subprocess.run(
                     [sys.executable,"-m","unittest",*suites,"-v"],
@@ -2187,7 +2188,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=136  # 122 B4-A accepted + 14 B4-B0 original evidence/read-only preflight checks
+                expected=156  # 136 B4-B0 accepted + 20 B4-B1 offline in-memory mock stage cases
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
