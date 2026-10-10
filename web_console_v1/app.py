@@ -1815,6 +1815,13 @@ async function previewRecoverySteps(){
     ];
     if(r.blockers?.length)lines.push('','注意事项：',...r.blockers.map(x=>'· '+x));
     const sim=r.offline_simulation;
+    const durable=r.durable_mock_safety;
+    if(durable){
+      lines.push('','B4-C2 跨进程持久预约安全审计（只读）',
+        '生产级阶段续跑：未开放',
+        '真实模型调用：0；真实项目写入：0；自动续跑授权：无',
+        '说明：'+durable.message);
+    }
     const faults=r.fault_readiness;
     if(faults){
       lines.push('','B4-C1 离线异常恢复安全审计（只读）',
@@ -2198,6 +2205,7 @@ class Handler(BaseHTTPRequestHandler):
                     "test_mock_stage_lease",
                     "test_mock_approval_contract",
                     "test_offline_fault_injection",
+                    "test_mock_durable_journal",
                 ]
                 proc=subprocess.run(
                     [sys.executable,"-m","unittest",*suites,"-v"],
@@ -2210,7 +2218,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=200  # 180 B4-B2 accepted + 20 B4-C1 isolated fault injection checks
+                expected=220  # 200 B4-C1 accepted + 20 B4-C2 tempfile durable subprocess tests
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
@@ -2640,6 +2648,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 from offline_fault_injection import summarize_fault_readiness
                 preview["fault_readiness"]=summarize_fault_readiness(preview["mock_approval_scope"])
+                from mock_durable_journal import summarize_durable_mock_safety
+                preview["durable_mock_safety"]=summarize_durable_mock_safety()
                 self._json(preview)
             except (ValueError,TypeError,OSError) as exc:
                 self._json({"ok":False,"error":"任务恢复预览无法完成："+str(exc)},409)
