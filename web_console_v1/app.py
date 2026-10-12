@@ -971,6 +971,7 @@ async function actRecoveryDemo(action){
   if(RECOVERY_DEMO_BUSY)return;
   if(action==='reset'&&!confirm('仅清除虚构演练的内存状态，确定重置吗？'))return;
   RECOVERY_DEMO_BUSY=true;
+  let errorMessage='';
   try{
     const r=await api('/api/demo/recovery-flow',{
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -979,11 +980,12 @@ async function actRecoveryDemo(action){
     if(!r.ok)throw Error(r.error||'模拟操作被阻断');
     renderRecoveryDemo(r);
   }catch(e){
-    document.getElementById('recoveryDemoNotice').textContent='本次操作停止：'+String(e);
+    errorMessage='本次操作停止：'+String(e);
   }finally{
     RECOVERY_DEMO_BUSY=false;
-    // Refresh safe in-memory state and enabled actions; never starts a real task.
+    // Refresh in-memory state without hiding any rejection reason.
     await refreshRecoveryDemo();
+    if(errorMessage)document.getElementById('recoveryDemoNotice').textContent=errorMessage;
   }
 }
 
