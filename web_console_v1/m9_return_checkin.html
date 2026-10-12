@@ -29,6 +29,7 @@ td input{width:115px}td select{width:110px}td input.date{width:145px}
 <button id="sample">加载 5 条虚构记录</button>
 <label class="filelabel" for="upload">导入 CSV</label><input id="upload" type="file" accept=".csv,text/csv" hidden>
 <button id="template" class="secondary">下载 CSV 模板</button>
+<button id="selftest" class="secondary">运行规则自检</button>
 <button id="download">导出核对结果</button>
 <button id="add" class="secondary">添加记录</button>
 <button id="reset" class="danger">清空记录</button>
@@ -156,6 +157,24 @@ el("sample").onclick=()=>{
 el("asof").onchange=render;el("filter").onchange=render;
 el("add").onclick=()=>{if(entries.length>=500){info("最多 500 行");return}entries.push(copyRow({"学生自报":"未填","晚间考勤":"未核实"}));el("filter").value="";render();info("已添加空白记录")};
 el("reset").onclick=()=>{if(confirm("确定清空本页记录？无自动备份。")){entries=[];render();info("已清空")}};
+el("selftest").onclick=()=>{
+ let count=0;const test=(ok,name)=>{if(!ok)throw Error(name);count++};
+ const asof="2026-10-12";
+ try{
+  test(status({"晚间考勤":"到校","学生自报":"未返校","预计返校日期":"2026-10-11"},asof)==="已核实到校","考勤优先");
+  test(status({"晚间考勤":"未到校","学生自报":"已返校","预计返校日期":"2026-10-11"},asof)==="信息冲突","冲突识别");
+  test(status({"晚间考勤":"未到校","学生自报":"留校","预计返校日期":"2026-10-11"},asof)==="信息冲突","留校冲突");
+  test(status({"晚间考勤":"未核实","学生自报":"已返校","预计返校日期":"2026-10-11"},asof)==="待核实考勤","考勤未知不得判已返");
+  test(status({"晚间考勤":"未到校","学生自报":"未返校","预计返校日期":"2026-10-11"},asof)==="逾期未到","逾期识别");
+  test(status({"晚间考勤":"未到校","学生自报":"未返校","预计返校日期":"2026-10-12"},asof)==="今日未到","当日识别");
+  test(status({"晚间考勤":"未到校","学生自报":"未返校","预计返校日期":"2026-10-13"},asof)==="预计未到","未到预计日期");
+  test(!dayOK("2026-02-30"),"非法日期");
+  const r=rowsFromCSV(csvCreate([COLS,["示例校区","示例学院","示例班","张,示例","DEMO001","2026-10-12","未返校","未核实",'备注"引号"']]));
+  test(r.length===1&&r[0]["姓名"]==="张,示例"&&r[0]["跟进备注"]==='备注"引号"',"CSV 导入导出");
+  test(csvQuote("=1+2").includes("'=1+2"),"CSV 公式安全转义");
+  info("本地规则自检通过："+count+" 项；没有上传数据，也没有修改本页记录。");
+ }catch(e){info("本地规则自检失败："+e.message)}
+};
 el("template").onclick=()=>saveCSV("返校核对模板.csv",[COLS]);
 el("download").onclick=()=>{
  if(!entries.length){info("没有可导出的记录");return}
