@@ -16,6 +16,7 @@ from coordinator import analyze_goal, refine_goal
 from team_executor import DynamicTeamRun
 from agent_profiles import load_agent_profiles
 from task_state import project_team_status, read_state, atomic_write_json
+from recovery_flow_demo import RecoveryFlowDemo
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -41,6 +42,7 @@ TEAM_RUNS = {}
 ANALYSES = {}
 PROJECT_APP = {"process": None, "entry": "", "url": "", "started_at": None, "log_file": ""}
 LOCK = threading.Lock()
+RECOVERY_DEMO = RecoveryFlowDemo()  # stand-alone synthetic in-memory experience
 
 
 def start_team_worker(draft_id, worker):
@@ -790,6 +792,32 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     </div>
   </div>
 
+  <div id="recoveryDemoCard" class="card">
+    <h3>阶段恢复完整演练 · 可操作版</h3>
+    <p style="color:#475569">这是独立的虚构开发任务，不读取下方历史任务，不连接 Codex / DeepSeek，不改写辅导员工作台。可刷新页面继续演练；关闭控制台后演练会重置。</p>
+    <div class="grid">
+      <div class="stat">演练状态<b id="recoveryDemoStatus">正在加载…</b></div>
+      <div class="stat">下一阶段<b id="recoveryDemoNext">-</b></div>
+      <div class="stat">模拟步骤次数<b id="recoveryDemoCalls">0</b></div>
+      <div class="stat">模拟预算消耗<b id="recoveryDemoCredits">0 / 5</b></div>
+    </div>
+    <div style="margin-top:12px">
+      <button id="demoCreateBtn" onclick="actRecoveryDemo('create')" style="background:#0f766e">① 创建虚构任务</button>
+      <button id="demoInterruptBtn" onclick="actRecoveryDemo('interrupt')">② 模拟中断</button>
+      <button id="demoInspectBtn" onclick="actRecoveryDemo('inspect')">③ 核查恢复位置</button>
+      <button id="demoApproveBtn" onclick="actRecoveryDemo('approve')" style="background:#166534">④ 批准当前模拟步骤</button>
+      <button id="demoContinueBtn" onclick="actRecoveryDemo('continue')" style="background:#2563eb">⑤ 继续当前模拟步骤</button>
+      <button id="demoLoseBtn" onclick="actRecoveryDemo('lose_receipt')" style="background:#9a3412">模拟回执丢失（冻结）</button>
+      <button id="demoResetBtn" onclick="actRecoveryDemo('reset')" style="background:#64748b">重置演练</button>
+    </div>
+    <p id="recoveryDemoNotice" style="color:#334155">正在加载虚构演练。</p>
+    <h4>阶段交接</h4>
+    <div id="recoveryDemoSteps" class="grid"></div>
+    <h4>演练记录</h4>
+    <pre id="recoveryDemoHistory" style="max-height:200px;overflow:auto;white-space:pre-wrap">尚未开始。</pre>
+    <p style="color:#9a3412">安全边界：这里所有审批与费用均为模拟，真实模型调用 0、真实项目写入 0；不能用这张卡片执行历史任务的真实续跑。</p>
+  </div>
+
   <div id="teamCard" class="card" style="display:none">
     <h3>团队执行</h3>
     <div class="grid">
@@ -863,6 +891,7 @@ function escapeHtml(s){
 }
 
 async function init(){
+  await refreshRecoveryDemo();
   await loadVersion();
   await loadExecutors();
   await loadAgentProfiles();
@@ -879,6 +908,83 @@ async function init(){
   }
   sel.onchange=refresh;
   refresh();
+}
+
+const RECOVERY_DEMO_ACTIONS={
+  idle:['create'], running_fake:['interrupt'], interrupted:['inspect'],
+  awaiting_fake_approval:['approve'], approved_fake:['continue','lose_receipt'],
+  completed_mock:[], frozen:[]
+};
+const RECOVERY_DEMO_LABELS={
+  idle:'尚未创建',running_fake:'模拟运行中',interrupted:'任务已中断',
+  awaiting_fake_approval:'等待当前步骤审批',approved_fake:'模拟审批完成',
+  completed_mock:'模拟任务完成',frozen:'结果不确定，已冻结'
+};
+let RECOVERY_DEMO_BUSY=false;
+
+function renderRecoveryDemo(d){
+  const state=d.state||'idle';
+  document.getElementById('recoveryDemoStatus').textContent=RECOVERY_DEMO_LABELS[state]||state;
+  document.getElementById('recoveryDemoNext').textContent=d.next_label||'-';
+  document.getElementById('recoveryDemoCalls').textContent=String(d.mock_calls||0);
+  document.getElementById('recoveryDemoCredits').textContent=(d.mock_credits_spent||0)+' / '+(d.mock_credits_total||5);
+  const allowed=RECOVERY_DEMO_ACTIONS[state]||[];
+  for(const [action,id] of [
+    ['create','demoCreateBtn'],['interrupt','demoInterruptBtn'],
+    ['inspect','demoInspectBtn'],['approve','demoApproveBtn'],
+    ['continue','demoContinueBtn'],['lose_receipt','demoLoseBtn'],
+    ['reset','demoResetBtn']
+  ]){
+    document.getElementById(id).disabled=RECOVERY_DEMO_BUSY||(
+      action==='reset'?state==='idle':!allowed.includes(action)
+    );
+  }
+  const steps=document.getElementById('recoveryDemoSteps');
+  steps.replaceChildren();
+  for(const stage of (d.steps||[])){
+    const item=document.createElement('div');
+    item.className='stat';
+    const label=document.createElement('span');
+    label.textContent=stage.name;
+    const status=document.createElement('b');
+    status.textContent={
+      verified:'已有可信模拟回执，直接复用',
+      completed_mock:'本次模拟执行已完成',
+      pending_mock:'尚未开始（不得默认已完成）'
+    }[stage.status]||stage.status;
+    item.append(label,status);
+    steps.appendChild(item);
+  }
+  document.getElementById('recoveryDemoHistory').textContent=(d.timeline||[]).join('\n')||'尚未运行。';
+  document.getElementById('recoveryDemoNotice').textContent=d.note||'仅模拟，无真实模型调用。';
+}
+async function refreshRecoveryDemo(){
+  try{
+    const d=await api('/api/demo/recovery-flow');
+    if(!d.ok)throw Error(d.error||'演练状态无法读取');
+    renderRecoveryDemo(d);
+  }catch(e){
+    document.getElementById('recoveryDemoNotice').textContent='演练加载失败：'+String(e);
+  }
+}
+async function actRecoveryDemo(action){
+  if(RECOVERY_DEMO_BUSY)return;
+  if(action==='reset'&&!confirm('仅清除虚构演练的内存状态，确定重置吗？'))return;
+  RECOVERY_DEMO_BUSY=true;
+  try{
+    const r=await api('/api/demo/recovery-flow',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action})
+    });
+    if(!r.ok)throw Error(r.error||'模拟操作被阻断');
+    renderRecoveryDemo(r);
+  }catch(e){
+    document.getElementById('recoveryDemoNotice').textContent='本次操作停止：'+String(e);
+  }finally{
+    RECOVERY_DEMO_BUSY=false;
+    // Refresh safe in-memory state and enabled actions; never starts a real task.
+    await refreshRecoveryDemo();
+  }
 }
 
 async function resumePendingTask(){
@@ -2176,6 +2282,10 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
 
+        if parsed.path=="/api/demo/recovery-flow":
+            self._json(RECOVERY_DEMO.snapshot())
+            return
+
         if parsed.path=="/api/version":
             try:
                 p=subprocess.run(
@@ -2206,6 +2316,7 @@ class Handler(BaseHTTPRequestHandler):
                     "test_mock_approval_contract",
                     "test_offline_fault_injection",
                     "test_mock_durable_journal",
+                    "test_recovery_flow_demo",
                 ]
                 proc=subprocess.run(
                     [sys.executable,"-m","unittest",*suites,"-v"],
@@ -2218,7 +2329,7 @@ class Handler(BaseHTTPRequestHandler):
                 import re
                 matches=re.findall(r"Ran\s+(\d+)\s+tests?",combined)
                 count=int(matches[-1]) if matches else 0
-                expected=220  # 200 B4-C1 accepted + 20 B4-C2 tempfile durable subprocess tests
+                expected=236  # 220 C2 accepted + 16 interactive isolated recovery-loop cases
                 self._json({
                     "ok":True,"passed":proc.returncode==0 and count==expected,
                     "test_count":count,"expected_tests":expected,
@@ -2675,6 +2786,16 @@ class Handler(BaseHTTPRequestHandler):
             data=json.loads(body.decode("utf-8"))
         except Exception:
             self._json({"ok":False,"error":"请求格式错误"},400)
+            return
+
+        if self.path=="/api/demo/recovery-flow":
+            if not isinstance(data,dict) or type(data.get("action")) is not str:
+                self._json({"ok":False,"error":"模拟操作格式不正确"},400)
+                return
+            try:
+                self._json(RECOVERY_DEMO.act(data["action"]))
+            except ValueError as exc:
+                self._json({"ok":False,"error":str(exc)},409)
             return
 
         if self.path=="/api/project/validate":
