@@ -792,6 +792,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     </div>
   </div>
 
+  <div class="card" id="m9BusinessTrial">
+    <h3>M9｜返校状态核对清单 · 真实功能试点</h3>
+    <p>这是独立的浏览器本地工具，可用虚构 CSV 验证学生自报、晚间考勤、异常分类、跟进备注及 CSV 导出，不连接原辅导员工作台，也不会调用模型。</p>
+    <button onclick="window.open('/m9/return-checkin','_blank','noopener,noreferrer')" style="background:#0f766e">打开返校核对清单</button>
+    <span class="badge">请先用虚构记录测试</span>
+  </div>
+
   <div id="recoveryDemoCard" class="card">
     <h3>阶段恢复完整演练 · 可操作版</h3>
     <p style="color:#475569">这是独立的虚构开发任务，不读取下方历史任务，不连接 Codex / DeepSeek，不改写辅导员工作台。可刷新页面继续演练；关闭控制台后演练会重置。</p>
@@ -2279,6 +2286,23 @@ class Handler(BaseHTTPRequestHandler):
             raw=INDEX_HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type","text/html; charset=utf-8")
+            self.send_header("Content-Length",str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+
+        if parsed.path=="/m9/return-checkin":
+            # Standalone local browser tool: no API endpoints and no student-data POST.
+            raw=Path(__file__).with_name("m9_return_checkin.html").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type","text/html; charset=utf-8")
+            self.send_header("Cache-Control","no-store")
+            self.send_header("X-Content-Type-Options","nosniff")
+            self.send_header("Referrer-Policy","no-referrer")
+            self.send_header("Content-Security-Policy",
+                             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';"
+                             " connect-src 'none'; img-src data:; object-src 'none'; base-uri 'none';"
+                             " form-action 'none'")
             self.send_header("Content-Length",str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
