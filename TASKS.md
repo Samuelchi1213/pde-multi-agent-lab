@@ -650,7 +650,12 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 - [ ] B4-C2 尚未验证真实断电/操作系统崩溃及硬件级持久性，不能据此授权生产调用。
 
 详见 [docs/PDE_M7_003_B4C2_DURABLE_MOCK_RESTART.md](docs/PDE_M7_003_B4C2_DURABLE_MOCK_RESTART.md)。
-- [ ] B4-C3：补充生产级审批、费用与工作区安全授权；真实付费断点续跑必须单独批准。
+- [x] B4-C3 生产准入审查清单与阶段计划已提交（2026-10-12）：G01–G09 九项 P0 门槛，当前统一 NO-GO；此项仅为设计文档，不视作 C3 开发完成。
+- [ ] **B4-C3-A：实现只读生产准入差距报告及离线测试，默认拒绝所有真实付费阶段续跑。**
+- [ ] B4-C3-B：真实身份/审批/费用/持久预约契约的隔离模拟及专项审计，仍不付费。
+- [ ] B4-C3-C：生产级阶段执行器与用户二次明确授权的安全评审；未知计费状态不得自动重试。
+
+详见 [docs/PDE_M7_003_B4C3_PRODUCTION_READINESS_GATE.md](docs/PDE_M7_003_B4C3_PRODUCTION_READINESS_GATE.md)。
 
 详见 [docs/PDE_M7_003_B4C1_OFFLINE_FAULT_INJECTION.md](docs/PDE_M7_003_B4C1_OFFLINE_FAULT_INJECTION.md)。
 
