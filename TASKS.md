@@ -679,3 +679,14 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 
 说明：[docs/PDE_M8_RECOVERY_FLOW_VERTICAL_SLICE.md](docs/PDE_M8_RECOVERY_FLOW_VERTICAL_SLICE.md)。
 
+
+
+## M9｜返校状态核对业务试点（2026-10-12）
+- [x] 选择贴近实际工作的小功能：分别保留学生自报与晚间考勤，核对冲突、考勤未知、逾期未返。
+- [x] 交付可操作的独立核对工具 `web_console_v1/m9_return_checkin.html`：虚构示例、表格编辑、日期和状态筛选、跟进备注、CSV 导入/模板/导出。
+- [x] 从 PDE 首页增加「M9｜返校状态核对清单」入口；服务端仅静态 GET，不添加学生数据写入端点。
+- [x] 规则代码开发侧完成 15 项断言检查与整体 JS 语法检查；页面提供 10 项可点击规则自检。
+- [ ] **M9 Windows 一次性业务验收：打开独立清单 → 加载示例 → 修改示例甲晚间考勤并观察冲突/已核实数量 → 运行 10 项规则自检 → 导出 CSV 正常打开。**
+- [ ] 用户核实当前「自报 + 晚间考勤」判定口径后，再规划如何安全接入现有辅导员工作台；目前仅用虚构资料，不接入真实学生信息、不新增真实模型费用。
+
+详见 [docs/PDE_M9_RETURN_CHECKIN_PILOT.md](docs/PDE_M9_RETURN_CHECKIN_PILOT.md)。
