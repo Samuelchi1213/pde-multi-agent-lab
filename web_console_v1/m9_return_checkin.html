@@ -31,9 +31,13 @@ td input{width:115px}td select{width:110px}td input.date{width:145px}
 <button id="template" class="secondary">下载 CSV 模板</button>
 <button id="selftest" class="secondary">运行规则自检</button>
 <button id="download">导出核对结果</button>
+<button id="saveAs" class="secondary">指定位置另存为 CSV</button>
 <button id="add" class="secondary">添加记录</button>
 <button id="reset" class="danger">清空记录</button>
-</div><p id="notice" aria-live="polite"></p></section>
+</div>
+<p id="notice" aria-live="polite"></p>
+<p><a id="exportLink" hidden download style="color:#0b7180;font-weight:bold;text-decoration:underline;font-size:15px"></a></p>
+<p id="downloadHelp" hidden class="small">如果浏览器没有弹出下载：请直接点击上方链接，或在 Edge 按 Ctrl+J 查看下载记录。也可以使用「指定位置另存为 CSV」选择保存文件夹。</p></section>
 <section class="panel"><h2>工作清单</h2>
 <div class="metrics">
 <div class="metric">总记录<b id="total">0</b></div>
@@ -58,7 +62,15 @@ const el=id=>document.getElementById(id);
 const day=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 function relative(n){const d=new Date();d.setDate(d.getDate()+n);return day(d)}
 function dayOK(s){if(!/^\d{4}-\d\d-\d\d$/.test(s))return false;const d=new Date(s+"T12:00:00");return !Number.isNaN(d.valueOf())&&day(d)===s}
-let entries=[];el("asof").value=day(new Date());
+let entries=[];
+let exportUrl=null;
+function invalidateExport(){
+  if(exportUrl){URL.revokeObjectURL(exportUrl);exportUrl=null}
+  el("exportLink").hidden=true;
+  el("exportLink").removeAttribute("href");
+  el("downloadHelp").hidden=true;
+}
+el("asof").value=day(new Date());
 function info(s){el("notice").textContent=s}
 function copyRow(x){const out={};for(const k of COLS)out[k]=String(x[k]??"").trim();return out}
 function status(row,date){
@@ -83,6 +95,9 @@ function selectFor(row,key,values){
   sel.value=row[key];sel.addEventListener("change",()=>{row[key]=sel.value;render()});return sel
 }
 function render(){
+  // Any edit, date change or filter switch invalidates the previous CSV link:
+  // a stale file must never be mistaken for the currently shown records.
+  invalidateExport();
   const date=el("asof").value;if(!dayOK(date)){info("请填写正确的核对日期");return}
   let tally={total:entries.length,arrived:0,conflict:0,late:0,pending:0},shown=0;
   const body=el("list");body.replaceChildren();
@@ -108,9 +123,28 @@ function csvQuote(x){
   return '"'+s.replace(/"/g,'""')+'"'
 }
 function csvCreate(rows){return "\uFEFF"+rows.map(row=>row.map(csvQuote).join(",")).join("\r\n")}
+function csvBlob(rows){return new Blob([csvCreate(rows)],{type:"text/csv;charset=utf-8"})}
 function saveCSV(name,rows){
- const blob=new Blob([csvCreate(rows)],{type:"text/csv;charset=utf-8"});const url=URL.createObjectURL(blob);
- const a=document.createElement("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)
+  const blob=csvBlob(rows);
+  invalidateExport();
+  exportUrl=URL.createObjectURL(blob);
+  // Use a *connected* anchor and keep the URL alive for manual retry.
+  // Some browser settings suppress automatic download clicks.
+  const a=el("exportLink");
+  a.download=name;
+  a.href=exportUrl;
+  a.textContent="若未自动下载，请点击这里手动保存："+name;
+  a.hidden=false;
+  el("downloadHelp").hidden=false;
+  a.click();
+  return {name, bytes:blob.size};
+}
+function exportRows(){
+  if(!entries.length)throw Error("没有可导出的记录");
+  if(!dayOK(el("asof").value))throw Error("核对日期无效，请先选择日期");
+  const headers=COLS.concat(["核对结果"]);
+  const rows=[headers].concat(entries.map(r=>COLS.map(k=>r[k]).concat([status(r,el("asof").value)])));
+  return {name:"返校核对结果_"+el("asof").value+".csv",rows};
 }
 function parseCSV(text){
  text=text.replace(/^\uFEFF/,"");if(text.length>300000)throw Error("文件超过 300KB");
@@ -175,11 +209,38 @@ el("selftest").onclick=()=>{
   info("本地规则自检通过："+count+" 项；没有上传数据，也没有修改本页记录。");
  }catch(e){info("本地规则自检失败："+e.message)}
 };
-el("template").onclick=()=>saveCSV("返校核对模板.csv",[COLS]);
+el("template").onclick=()=>{
+  try{
+    const result=saveCSV("返校核对模板.csv",[COLS]);
+    info("CSV 模板已生成并请求下载（"+result.bytes+" 字节）。未下载时请点击下方手动链接。");
+  }catch(e){info("模板生成失败："+e.message)}
+};
 el("download").onclick=()=>{
- if(!entries.length){info("没有可导出的记录");return}
- const rows=[COLS.concat(["核对结果"])].concat(entries.map(r=>COLS.map(k=>r[k]).concat([status(r,el("asof").value)])));
- saveCSV("返校核对结果_"+el("asof").value+".csv",rows);info("已导出全部记录，不仅限筛选行。请人工复核。")
+  try{
+    const {name,rows}=exportRows();
+    const result=saveCSV(name,rows);
+    info("已生成 "+(rows.length-1)+" 行 CSV（"+result.bytes+" 字节），并请求浏览器下载。若没有文件，请点击下方手动下载链接或按 Ctrl+J；尚不能确认浏览器已经保存成功。");
+  }catch(e){info("CSV 导出失败："+e.message)}
+};
+el("saveAs").onclick=async()=>{
+  if(typeof window.showSaveFilePicker!=="function"){
+    info("当前浏览器不支持指定位置另存为；请使用「导出核对结果」及手动下载链接。");return;
+  }
+  try{
+    const {name,rows}=exportRows();
+    // Picker is invoked synchronously in the click handler, before other awaits.
+    const handle=await window.showSaveFilePicker({
+      suggestedName:name,
+      types:[{description:"CSV 表格文件",accept:{"text/csv":[".csv"]}}]
+    });
+    const writer=await handle.createWritable();
+    await writer.write(csvBlob(rows));
+    await writer.close();
+    info("已通过浏览器的保存文件对话框写入 "+(rows.length-1)+" 行 CSV。请打开选定的文件夹查看。");
+  }catch(e){
+    if(e&&e.name==="AbortError")info("已取消另存为，没有修改任何文件。");
+    else info("另存为失败："+String(e&&e.message||e)+"。请改用普通导出和下方手动下载链接。");
+  }
 };
 el("upload").onchange=async event=>{
  const file=event.target.files&&event.target.files[0];event.target.value="";
