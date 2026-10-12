@@ -664,3 +664,16 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 详见 [docs/PDE_M7_003_B4A_OFFLINE_STAGE_RECOVERY.md](docs/PDE_M7_003_B4A_OFFLINE_STAGE_RECOVERY.md)。
 
 参考：[docs/PDE_M7_003_B3_RECOVERY_PREVIEW.md](docs/PDE_M7_003_B3_RECOVERY_PREVIEW.md)。
+
+
+## M8｜由模块验收改为完整功能闭环（2026-10-12）
+
+- [x] 确定以使用流程为中心的里程碑交付方式：一个完整闭环统一验收，而非每 20 项回归测试验收一次。
+- [x] 提交「阶段恢复完整演练 · 可操作版」：创建虚构任务 → 模拟中断 → 恢复位置核查 → 逐阶段模拟审批 → 模拟继续 → 完成测试。
+- [x] 复用 B4-A 阶段模拟、B4-B1 内存假执行器、B4-B2 模拟审批；增加回执丢失冻结、重复操作保护、状态与模拟预算可视化。
+- [x] 新增 16 项端到端离线测试，综合测试预计 **236 项**；旧 220 项基线继续保留。
+- [ ] **M8 Windows 统一验收（一次）：实际操作完整正常流程并完成 QA；再验证回执丢失冻结；最后运行 236 项综合测试。**
+- [ ] 验收后再讨论特定真实任务的最小可用恢复路径；此前不开放真实 Codex/DeepSeek 付费续跑。
+
+说明：[docs/PDE_M8_RECOVERY_FLOW_VERTICAL_SLICE.md](docs/PDE_M8_RECOVERY_FLOW_VERTICAL_SLICE.md)。
+
