@@ -715,7 +715,8 @@ PM 分配 → Developer 执行 → QA 检查 → 失败退回 → 修复 → 再
 - [x] GitHub 静态审查现有 `coordinator.analyze_goal`、`DynamicTeamRun.run`、DeepSeek 角色调用、Codex CLI、自动测试与隔离目录。
 - [x] 为首次真正多 Agent 任务准备 [M11 执行任务与证据标准](docs/PDE_M11_FIRST_REAL_MULTIAGENT_RUN.md)：全新虚构 CSV 过滤 CLI，必须留下本次真实模型和开发文件/测试证据；不改任何已有业务工作台。
 - [x] **M11 S01 本机无付费环境核查通过（2026-10-13）：用户 PDE 执行器截图显示 Codex CLI 命令已检测、DeepSeek API Key 已配置用户环境变量；不代表认证或模型调用已通过。**
-- [ ] **M11 S02 本机 CLI 登录状态只读核查：Windows CMD 运行 `codex --version && codex login status`；仅反馈版本/登录状态，不发送凭据，不执行真实推理。**
+- [x] **M11 S02 CLI 安装和登录状态确认（2026-10-13）：用户 CMD 截图显示 `codex-cli 0.160.0`、`Logged in using ChatGPT`，命令正常退出；未调用模型。**
+- [ ] **M11 S02b 模型可用性尚未确认：当前 PDE 执行器硬编码 `gpt-5.6-sol`，CLI 已登录不代表该型号可真实调用；应在费用授权和安全调用控制完成后验证。**
 - [ ] **M11 真实费用与上限审查：当前分析按钮本身会调用 DeepSeek，团队最多自动返工 2 次，16000 token 预检查不是金额硬上限；必须在用户明确授权和可靠控制后启动。**
 - [ ] M11 启动前审阅 PDE 真实草案（至少开发+测试角色、隔离模式、验收标准），随后才由用户主动启动一次真实执行。
 - [ ] M11 真正执行后独立核查角色调用与用量证据、Codex 输出代码、自动测试退出码、测试 Agent 结论和人工验收；未做到则如实判未通过，禁止手工补成果冒充 PDE。
