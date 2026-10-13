@@ -120,11 +120,15 @@ function classify(store,id,date){
    else summary="其他异常待核实";
  }else summary=p.eta<=date?"到期待确认":"未报异常（非到校证明）";
  const review=latestReview(store,id,date);
+ // Never carry a previous verification forward after the cited evening
+ // attendance has been corrected. Preserve the old review in its audit history.
+ const reviewStale=!!(review&&(!sub||review.basedOnAttendanceVersion!==sub.version));
  return {studentId:id,classId:s.classId,name:s.name,report:p.report,eta:p.eta,
     planVersion:p.version,date,submissionStatus:submissionStatus(store,s.classId,date),
     attendanceVersion:sub?sub.version:0,exception:exception?exception.category:"无单人异常记录",
     exceptionNote:exception?exception.note:"",summary,
-    review:review?review.result:"未人工核实",reviewNote:review?review.note:""};
+    review:reviewStale?"需重新核实（考勤已修订）":review?review.result:"未人工核实",
+    reviewNote:review?review.note:"",reviewStale};
 }
 function recordReview(store,id,date,result,note){
  const s=student(store,id);ensure(validDay(date),"日期无效");
