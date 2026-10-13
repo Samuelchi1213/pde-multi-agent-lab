@@ -313,6 +313,9 @@ el("selftest").onclick=()=>{
   C.recordReview(test,"A1",d,"继续跟进","已联系但尚未确认");
   ok(C.submission(test,"C1",d).exceptions.length===1,"核实不覆盖考勤");
   try{C.submitAttendance(test,"C1",d,[{studentId:"A1",category:"未见到",note:"晚间未见"}],{explicitConfirmed:true});throw Error("重复提交未阻断")}catch(e){ok(e.message!=="重复提交未阻断","阻断重复提交")}
+  C.submitAttendance(test,"C1",d,[],{explicitConfirmed:true,correctionReason:"班委修订"});
+  ok(C.classify(test,"A1",d).review==="需重新核实（考勤已修订）","旧核实证据失效");
+  ok(C.reviewHistory(test,"A1",d).length===1,"旧核实历史仍保留");
   C.approveExport(test,d);ok(C.exportData(test,d).includes("班级提交状态"),"允许导出");
   C.amendPlan(test,"A2","已返校",d);
   try{C.exportData(test,d);throw Error("变更后批准仍有效")}catch(e){ok(e.message!=="变更后批准仍有效","变更使批准失效")}
