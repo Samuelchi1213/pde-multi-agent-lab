@@ -792,6 +792,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     </div>
   </div>
 
+  <div class="card" id="m10BusinessTrial">
+    <h3>M10｜返校核对四角色协作 · 生活委员只报异常（B模式）</h3>
+    <p>独立、可操作的虚构数据闭环：学生改计划 → 生活委员每日只报异常/明确无异常 → 辅导员核实 → 助理按模拟批准导出 CSV。所有变更留模拟历史，不动现有 M9 和真实工作台。</p>
+    <button onclick="window.open('/m10/return-workflow','_blank','noopener,noreferrer')" style="background:#0f766e">打开 M10 四角色协作演练</button>
+    <span class="badge">虚构数据 · 无真实身份授权</span>
+  </div>
+
   <div class="card" id="m9BusinessTrial">
     <h3>M9｜返校状态核对清单 · 真实功能试点</h3>
     <p>这是独立的浏览器本地工具，可用虚构 CSV 验证学生自报、晚间考勤、异常分类、跟进备注及 CSV 导出，不连接原辅导员工作台，也不会调用模型。</p>
@@ -2286,6 +2293,26 @@ class Handler(BaseHTTPRequestHandler):
             raw=INDEX_HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type","text/html; charset=utf-8")
+            self.send_header("Content-Length",str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+
+        if parsed.path in ("/m10/return-workflow","/m10/return-core.js"):
+            # Synthetic-only browser workflow. Never accepts or stores student data.
+            is_script=parsed.path.endswith(".js")
+            filename="m10_return_core.js" if is_script else "m10_return_workflow.html"
+            raw=Path(__file__).with_name(filename).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type",
+                "application/javascript; charset=utf-8" if is_script else "text/html; charset=utf-8")
+            self.send_header("Cache-Control","no-store")
+            self.send_header("X-Content-Type-Options","nosniff")
+            self.send_header("Referrer-Policy","no-referrer")
+            self.send_header("Content-Security-Policy",
+                "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline';"
+                " connect-src 'none'; img-src data:; object-src 'none'; base-uri 'none';"
+                " form-action 'none'; frame-ancestors 'none'")
             self.send_header("Content-Length",str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
