@@ -2,7 +2,7 @@
 
 最后更新：2026-10-12
 
-> **最新工作节点：M11 S01 本机执行器检测通过；下一步只读核实 Codex CLI 版本和登录状态，尚未批准模型费用或启动真实任务。**
+> **最新工作节点：M11 S01/S02 环境检测与 Codex CLI ChatGPT 登录核查通过；下一步确认真实调用限额和模型兼容性，尚未启动 PDE 真正多 Agent 开发。**
 > 用户已确认改为以完整功能交付为主的开发模式：不再每增加少量回归测试就单独验收。
 > PDE 现新增浏览器本地处理的 M9 核对清单，试点期间只允许虚构记录验收；真实 Codex/DeepSeek 历史任务自动续跑仍不开放。下方 Milestone 0 等为历史记录，不是当前开发位置。
 
@@ -1267,3 +1267,10 @@ UI 修复：
 - 下一项 S02：本机 Windows CMD 运行 `codex --version && codex login status`，仅反馈版本/认证提示，避免截图透露密钥。命令是只读登录状态核查，不推理、不调用 DeepSeek。
 - 在用户批准真实费用与可靠的停止条件前，禁止点击 PDE 的 DeepSeek 分析和团队执行按钮；M10 业务原型暂缓进一步开发/验收。
 - M11 方案更新：[docs/PDE_M11_FIRST_REAL_MULTIAGENT_RUN.md](docs/PDE_M11_FIRST_REAL_MULTIAGENT_RUN.md)。
+
+## 2026-10-13｜M11 S02 已确认 Codex CLI 登录成功（未发模型调用）
+- 用户 Windows 命令提示符截图：`codex --version && codex login status` 实际输出 `codex-cli 0.160.0` 和 `Logged in using ChatGPT`；所以 Codex CLI 安装、命令可用性与 ChatGPT 本地登录状态通过。
+- **不可据此断言固定 `gpt-5.6-sol` 模型支持或能调用成功**；DeepSeek 目前仍只证明 Key 环境变量存在，未经 API 鉴权请求。
+- 现有团队执行器最多自动返工 2 次，DeepSeek 用量门槛不是人民币硬上限；未经项目负责人明确费用与次数授权不启动 PDE 协调分析或真实团队执行。
+- 下一步：确定本次允许的 DeepSeek 成本/调用次数与 Codex 配额消耗/重试上限，并补全实际可靠的执行前门槛；首次任务严格隔离，并保留多角色实际生成文件和审查凭据。
+- 详见 [M11 首次真实运行文档](docs/PDE_M11_FIRST_REAL_MULTIAGENT_RUN.md)。
