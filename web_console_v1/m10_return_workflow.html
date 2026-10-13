@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>M10｜返校核对多角色协作 · B模式</title>
+<style>
+*{box-sizing:border-box}body{background:#f3f6fa;color:#19263b;font:14px "Microsoft YaHei","PingFang SC",system-ui,sans-serif;margin:0}
+main{max-width:1320px;margin:25px auto;padding:0 15px 40px}h1{font-size:25px;margin:0 0 8px}h2{font-size:19px;margin:0 0 8px}h3{font-size:15px}p{line-height:1.6}
+.panel{background:white;padding:22px;border:1px solid #e0e7f0;border-radius:14px;margin:15px 0;box-shadow:0 2px 10px #18223b05}
+.small{font-size:13px;color:#607089}.warning{background:#fff6e7;border-left:4px solid #cc792b;padding:13px;border-radius:7px}
+.bar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:15px 0}button{color:white;background:#116d7a;border:0;border-radius:8px;padding:9px 13px;cursor:pointer;font:inherit;font-weight:600}
+button.secondary{background:#4d647f}button.warn{background:#9c4d31}button:disabled{opacity:.45;cursor:not-allowed}
+input,select,textarea{font:inherit;border:1px solid #bbc9db;border-radius:7px;padding:8px;background:white;max-width:100%}
+label{display:inline-flex;flex-direction:column;gap:5px;font-weight:600;font-size:13px}textarea{min-width:220px;min-height:40px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.fieldbox{background:#f4f7fb;border-radius:10px;padding:14px}.count b{font-size:22px;display:block}
+.kpi{display:flex;flex-wrap:wrap;gap:10px}.kpi>div{padding:13px;background:#eff4fa;border-radius:10px;flex:1;min-width:150px}
+.kpi b{display:block;font-size:22px}
+.table{overflow:auto;border:1px solid #e1e9f0;border-radius:10px}table{width:100%;border-collapse:collapse;min-width:1050px;font-size:12px}
+th,td{padding:10px;text-align:left;border-bottom:1px solid #e9edf2}th{background:#f3f6fa;white-space:nowrap}
+.tag{padding:5px 7px;border-radius:6px;background:#e5eff9;color:#244a77;display:inline-block}
+.tag.warn{background:#fff0d8;color:#8b5407}.tag.red{background:#fde5e5;color:#933438}
+.tag.ok{background:#e0f4e7;color:#1e704a}
+#notice{min-height:26px;color:#125b70;font-weight:600}
+ul{margin:8px 0;padding-left:19px;line-height:1.8}pre{overflow:auto;background:#101c30;color:#f3f8ff;padding:14px;border-radius:10px;max-height:210px;white-space:pre-wrap}
+nav{display:flex;flex-wrap:wrap;gap:7px}nav a{color:#0b647a;text-decoration:none;background:#e8f3f7;padding:8px;border-radius:8px}
+@media(max-width:650px){.panel{padding:15px}h1{font-size:21px}}
+</style></head>
+<body><main>
+<section class="panel">
+<h1>M10｜返校核对多角色协作 <span class="small">B模式 · 只登记异常</span></h1>
+<p>体验一条完整流程：学生修改计划 → 生活委员当晚只报异常/明确无异常 → 辅导员核实 → 学生助理导出。</p>
+<div class="warning"><strong>仅供虚构数据功能验收。</strong> 角色切换不是身份认证；页面不向服务器发送学生资料，不自动保存。刷新或重启后状态消失。不能导入真实学生姓名、学号、学校名单，不能代替正式学校考勤结果。</div>
+<div class="bar"><button id="initialize">加载虚构团队（7 人、2 班）</button><button id="reset" class="warn">重置演练</button>
+<label>共同核对日期 <input id="day" type="date"></label><button id="selftest" class="secondary">运行业务规则自检</button></div>
+<nav><a href="#student">① 学生自报</a><a href="#committee">② 生活委员异常上报</a><a href="#counselor">③ 辅导员核实</a><a href="#assistant">④ 助理导出</a></nav>
+<p id="notice" role="status" aria-live="polite">请先加载虚构团队。</p>
+</section>
+<section class="panel" id="student">
+<h2>① 学生｜只修改自己的自报计划（模拟）</h2>
+<p class="small">计划修改保留旧版本；不能改生活委员考勤或辅导员核实。</p>
+<div class="bar">
+<label>虚构学生 <select id="studentPick"></select></label>
+<label>学生自报 <select id="studentReport"><option>已返校</option><option>未返校</option><option>留校</option></select></label>
+<label>预计返校日期 <input id="studentEta" type="date"></label>
+<button id="savePlan">保存自报新版本</button></div>
+<h3>自报变更记录</h3><ul id="planHistory"></ul>
+</section>
+<section class="panel" id="committee">
+<h2>② 生活委员｜只上报异常（B 模式）</h2>
+<p class="small">不需要点名全班。<strong>未提交 ≠ 已核对无异常</strong>；明确提交零异常也不是全班已返校证明。</p>
+<div class="bar"><label>本人负责班级（虚构角色） <select id="classPick"></select></label>
+<span class="tag" id="classStatus">未提交</span>
+<button id="loadRevision" class="secondary">加载已提交记录以修订</button></div>
+<div class="bar">
+<label>本班异常学生 <select id="exceptionStudent"></select></label>
+<label>异常类别 <select id="exceptionType"><option>未见到</option><option>报告请假</option><option>其他待核实</option></select></label>
+<label>异常备注（可选） <input id="exceptionNote" maxlength="300" placeholder="仅描述核对情况"></label>
+<button id="addException">登记到本晚异常草稿</button>
+</div>
+<h3>本晚待提交的异常草稿</h3><ul id="draftList"></ul>
+<div class="bar">
+<label>修订原因（首次提交不需填写） <input id="revisionReason" maxlength="200" placeholder="修改旧提交时必须填写"></label>
+<button id="submitZero" class="secondary">明确提交：本晚已核对，无异常</button>
+<button id="submitAbnormal">提交本晚异常名单</button>
+</div>
+<h3>班级当晚提交版本历史</h3><ul id="attendanceHistory"></ul>
+</section>
+<section class="panel" id="counselor">
+<h2>③ 辅导员｜查看证据并人工核实</h2>
+<div class="kpi">
+<div>待提交班级<b id="unsubmitted">-</b></div>
+<div>当晚报异常人员<b id="abnormalCount">-</b></div>
+<div>自报与异常冲突<b id="conflictCount">-</b></div>
+<div>到期待确认人员<b id="dueCount">-</b></div>
+</div>
+<div class="table"><table><thead><tr><th>学生/班级</th><th>最新自报</th><th>预计返校</th><th>班级当晚提交</th><th>异常情况</th><th>系统提示</th><th>人工核实</th></tr></thead><tbody id="reviewTable"></tbody></table></div>
+<div class="bar">
+<label>核实学生 <select id="reviewStudent"></select></label>
+<label>本晚人工核实结果 <select id="reviewResult"><option>继续跟进</option><option>确认当晚在校</option><option>确认当晚不在校</option></select></label>
+<label>核实依据/联系备注 <input id="reviewNote" maxlength="300" placeholder="至少输入2个字"></label>
+<button id="saveReview">保存核实记录</button>
+</div>
+<h3>当前学生人工核实历史</h3><ul id="reviewHistory"></ul>
+<div class="bar"><button id="approve" class="secondary">辅导员模拟批准本日助理导出</button><span id="approvalStatus" class="small">尚未批准</span></div>
+</section>
+<section class="panel" id="assistant">
+<h2>④ 学生助理｜经模拟批准后导出</h2>
+<p class="small">导出包含所选日期的 7 条虚构记录；同时保留班级「未提交/无异常/有异常」、个人异常及人工核实状态。<strong>未报异常不等于已返校。</strong> 模拟批准不是实际权限认证。</p>
+<div class="bar"><button id="download">导出本日核对清单 CSV</button><button id="saveAs" class="secondary">指定位置另存为 CSV</button></div>
+<p><a id="manualLink" download hidden style="color:#0d6379;font-weight:bold;text-decoration:underline"></a></p>
+<p class="small">如果浏览器没有自动下载，请点击上面的手动链接，或在 Edge 按 Ctrl+J 查看下载记录；WPS 可直接打开 CSV。修改记录后必须重新模拟批准。</p>
+</section>
+<section class="panel">
+<h2>演练操作记录（仅当前页面）</h2><pre id="audit">未加载。</pre>
+</section>
+<script src="/m10/return-core.js"></script>
+<script>
+"use strict";
+const C=window.M10Core;
+let store=null,draft=[],downloadUrl=null;
+const el=id=>document.getElementById(id);
+function today(){const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-")}
+el("day").value=today();
+function notify(message){el("notice").textContent=message}
+function requireStore(){if(!store)throw Error("请先加载虚构团队")}
+function clearLink(){
+ if(downloadUrl){URL.revokeObjectURL(downloadUrl);downloadUrl=null}
+ const link=el("manualLink");link.removeAttribute("href");link.hidden=true;
+}
+function act(fn){
+ try{fn();render()}catch(e){notify("操作未完成："+String(e.message||e))}
+}
+function button(label,onClick,cls){
+ const b=document.createElement("button");b.type="button";b.textContent=label;
+ if(cls)b.className=cls;b.addEventListener("click",onClick);return b
+}
+function optionList(select,items,valueFn,textFn){
+ select.replaceChildren();
+ for(const item of items){const option=document.createElement("option");
+   option.value=valueFn(item);option.textContent=textFn(item);select.appendChild(option)}
+}
+function appendList(id,items){
+ const u=el(id);u.replaceChildren();
+ if(!items.length){const li=document.createElement("li");li.textContent="暂无记录";u.appendChild(li);return}
+ for(const t of items){const li=document.createElement("li");li.textContent=t;u.appendChild(li)}
+}
+function ensureSelections(){
+ if(!store)return;
+ const previous={student:el("studentPick").value,cl:el("classPick").value,review:el("reviewStudent").value};
+ const students=store.students,classes=store.classes;
+ optionList(el("studentPick"),students,s=>s.id,s=>s.name+" · "+s.studentNo);
+ optionList(el("reviewStudent"),students,s=>s.id,s=>s.name+" · "+C.clazz(store,s.classId).name);
+ optionList(el("classPick"),classes,c=>c.id,c=>c.name);
+ if(students.some(s=>s.id===previous.student))el("studentPick").value=previous.student;
+ if(students.some(s=>s.id===previous.review))el("reviewStudent").value=previous.review;
+ if(classes.some(c=>c.id===previous.cl))el("classPick").value=previous.cl;
+ renderExceptionStudents();
+}
+function renderExceptionStudents(){
+ if(!store)return;
+ const id=el("classPick").value,previous=el("exceptionStudent").value;
+ const members=store.students.filter(s=>s.classId===id);
+ optionList(el("exceptionStudent"),members,s=>s.id,s=>s.name+" · "+s.studentNo);
+ if(members.some(s=>s.id===previous))el("exceptionStudent").value=previous;
+}
+function readPlanSelection(){
+ if(!store)return;
+ const s=C.student(store,el("studentPick").value),p=C.plan(s);
+ el("studentReport").value=p.report;el("studentEta").value=p.eta;
+}
+function renderPlan(){
+ if(!store){appendList("planHistory",[]);return}
+ const s=C.student(store,el("studentPick").value);
+ appendList("planHistory",s.plans.map(p=>"版本 "+p.version+"：自报 "+p.report+"，预计 "+p.eta+"（"+p.recordedAt+"）"));
+}
+function renderDraft(){
+ const list=el("draftList");list.replaceChildren();
+ if(!draft.length){const li=document.createElement("li");li.textContent="当前草稿无异常；提交前需明确确认当晚已经核对。";list.appendChild(li);return}
+ for(const item of draft){
+ const li=document.createElement("li");
+ const name=C.student(store,item.studentId).name;
+ const label=document.createElement("span");label.textContent=name+"｜"+item.category+"｜"+(item.note||"无备注")+" ";
+ li.appendChild(label);
+ li.appendChild(button("移除",()=>{
+    draft=draft.filter(d=>d.studentId!==item.studentId);renderDraft();
+ },"warn"));
+ list.appendChild(li);
+ }
+}
+function renderCommittee(){
+ if(!store){el("classStatus").textContent="未加载";appendList("attendanceHistory",[]);return}
+ const cls=el("classPick").value,date=el("day").value;
+ el("classStatus").textContent=C.submissionStatus(store,cls,date);
+ const versions=C.attendanceHistory(store,cls,date);
+ appendList("attendanceHistory",versions.map(v=>"版本 "+v.version+"："+v.exceptions.length+" 条异常 · "+v.recordedAt+
+    (v.reason?" · 修订原因："+v.reason:"")+
+    (v.exceptions.length?" · "+v.exceptions.map(e=>C.student(store,e.studentId).name+"/"+e.category).join("，"):" · 明确无异常")));
+ renderDraft();
+}
+function tag(label,kind){
+ const span=document.createElement("span");span.className="tag "+kind;span.textContent=label;return span;
+}
+function td(tr,text,kind){
+ const d=document.createElement("td");
+ if(kind)d.appendChild(tag(text,kind));else d.textContent=text;
+ tr.appendChild(d);
+}
+function renderCounselor(){
+ const body=el("reviewTable");body.replaceChildren();
+ if(!store)return;
+ const date=el("day").value,rows=C.rowsForDate(store,date);
+ el("unsubmitted").textContent=store.classes.filter(c=>!C.submission(store,c.id,date)).length;
+ el("abnormalCount").textContent=rows.filter(r=>r.exception!=="无单人异常记录").length;
+ el("conflictCount").textContent=rows.filter(r=>r.summary==="自报与当晚异常冲突").length;
+ el("dueCount").textContent=rows.filter(r=>r.summary==="到期待确认").length;
+ for(const row of rows){
+ const tr=document.createElement("tr");
+ td(tr,row.name+" / "+C.clazz(store,row.classId).name);
+ td(tr,row.report);td(tr,row.eta);
+ td(tr,row.submissionStatus,row.submissionStatus==="未提交"?"warn":"");
+ td(tr,row.exception,row.exception==="无单人异常记录"?"":"warn");
+ td(tr,row.summary,row.summary.includes("冲突")?"red":row.summary.includes("核实")||row.summary.includes("待确认")?"warn":"");
+ td(tr,row.review,row.review.startsWith("确认")?"ok":"");
+ body.appendChild(tr);
+ }
+ const s=el("reviewStudent").value,history=C.reviewHistory(store,s,date);
+ appendList("reviewHistory",history.map(v=>"版本 "+v.version+"："+v.result+"，"+v.note+"（"+v.recordedAt+"；引用考勤版本 "+v.basedOnAttendanceVersion+"）"));
+ const valid=store.exportApproval&&store.exportApproval.date===date&&store.exportApproval.revision===store.revision;
+ el("approvalStatus").textContent=valid?"当前数据已模拟批准，可导出":"未批准或修改后批准失效";
+}
+function render(){
+ if(!store){notify("请先加载虚构团队。");return}
+ renderPlan();renderCommittee();renderCounselor();
+ el("audit").textContent=store.trail.slice(-28).map(x=>x.at+"："+x.message).join("\n");
+}
+function changed(){clearLink();render()}
+el("initialize").onclick=()=>act(()=>{
+ store=C.demoStore(el("day").value);draft=[];clearLink();ensureSelections();readPlanSelection();
+ notify("虚构团队已加载。建议从学生修改计划、班委提交两班不同考勤开始。");
+});
+el("reset").onclick=()=>act(()=>{
+ if(!confirm("仅重置浏览器内的虚构数据。确定继续？"))return;
+ store=C.demoStore(el("day").value);draft=[];clearLink();ensureSelections();readPlanSelection();notify("虚构演练已重置。");
+});
+el("day").onchange=()=>{
+ if(!C.validDay(el("day").value)){notify("核对日期格式无效");return}
+ draft=[];el("revisionReason").value="";clearLink();render();
+};
+el("studentPick").onchange=()=>{readPlanSelection();renderPlan()};
+el("classPick").onchange=()=>{draft=[];el("revisionReason").value="";renderExceptionStudents();renderCommittee()};
+el("reviewStudent").onchange=renderCounselor;
+el("savePlan").onclick=()=>act(()=>{
+ requireStore();const id=el("studentPick").value;
+ C.amendPlan(store,id,el("studentReport").value,el("studentEta").value);
+ changed();notify("已保存自报新版本，旧版本仍可在历史中查看。");
+});
+el("addException").onclick=()=>act(()=>{
+ requireStore();
+ const s=C.student(store,el("exceptionStudent").value);
+ if(s.classId!==el("classPick").value)throw Error("不能跨班登记");
+ if(draft.some(x=>x.studentId===s.id))throw Error("草稿中已有该学生，请先移除旧项");
+ draft.push({studentId:s.id,category:el("exceptionType").value,note:el("exceptionNote").value.trim()});
+ el("exceptionNote").value="";renderDraft();notify("已加入当晚异常草稿，尚未提交。");
+});
+el("loadRevision").onclick=()=>act(()=>{
+ requireStore();
+ const cur=C.submission(store,el("classPick").value,el("day").value);
+ if(!cur)throw Error("该班这晚还没有提交，无需加载修订");
+ draft=cur.exceptions.map(x=>({...x}));
+ renderDraft();notify("已加载第 "+cur.version+" 版当前异常记录。修改后填写修订原因再提交。");
+});
+function submit(zero){
+ requireStore();
+ const list=zero?[]:draft;
+ if(!zero&&!list.length)throw Error("无异常时请使用「明确提交：本晚已核对，无异常」");
+ const previous=C.submission(store,el("classPick").value,el("day").value);
+ if(!confirm("确定本晚已经核对，并"+(list.length?"提交 "+list.length+" 条异常":"明确提交零异常")+"？"))return;
+ const record=C.submitAttendance(store,el("classPick").value,el("day").value,list,
+  {explicitConfirmed:true,correctionReason:el("revisionReason").value});
+ draft=record.exceptions.map(x=>({...x}));el("revisionReason").value="";
+ changed();notify("已提交第 "+record.version+" 版；"+record.exceptions.length+" 条异常。未报异常不代表本人已返校。");
+}
+el("submitZero").onclick=()=>act(()=>submit(true));
+el("submitAbnormal").onclick=()=>act(()=>submit(false));
+el("saveReview").onclick=()=>act(()=>{
+ requireStore();
+ C.recordReview(store,el("reviewStudent").value,el("day").value,
+   el("reviewResult").value,el("reviewNote").value);
+ el("reviewNote").value="";changed();notify("人工核实已单独记入历史，原学生自报和班委记录保持不变。");
+});
+el("approve").onclick=()=>act(()=>{
+ requireStore();C.approveExport(store,el("day").value);
+ clearLink();render();notify("已模拟批准当前日期和数据版本的助理只读导出；后续更改会使批准失效。");
+});
+function fileDetails(){
+ requireStore();
+ const date=el("day").value;
+ return {name:"M10_返校异常核对_"+date+".csv",blob:new Blob([C.exportData(store,date)],{type:"text/csv;charset=utf-8"})};
+}
+function download(){
+ try{
+  const {name,blob}=fileDetails();clearLink();
+  downloadUrl=URL.createObjectURL(blob);
+  const link=el("manualLink");link.href=downloadUrl;link.download=name;
+  link.textContent="如果未自动下载，点击这里保存："+name;link.hidden=false;link.click();
+  notify("CSV 已生成并请求浏览器下载（"+blob.size+" 字节）；如果未看到文件，使用下方手动链接。");
+ }catch(e){notify("导出未完成："+e.message)}
+}
+el("download").onclick=download;
+el("saveAs").onclick=async()=>{
+ try{
+  if(typeof window.showSaveFilePicker!=="function")throw Error("当前浏览器不支持指定位置另存为，请用普通下载或手动链接");
+  const {name,blob}=fileDetails();
+  const handle=await window.showSaveFilePicker({
+    suggestedName:name,types:[{description:"CSV",accept:{"text/csv":[".csv"]}}]
+  });
+  const writer=await handle.createWritable();await writer.write(blob);await writer.close();
+  notify("已写入选定文件夹（"+blob.size+" 字节），请使用 WPS 打开复核。");
+ }catch(e){notify(e.name==="AbortError"?"已取消文件保存。":"另存为失败："+e.message)}
+};
+el("selftest").onclick=()=>{
+ let n=0;function ok(value,message){if(!value)throw Error(message);n++}
+ try{
+  const test=C.demoStore("2026-10-13"),d="2026-10-13";
+  ok(C.submissionStatus(test,"C1",d)==="未提交","未提交");
+  ok(C.classify(test,"A1",d).summary==="班级未提交","无证据不判到校");
+  C.submitAttendance(test,"C2",d,[],{explicitConfirmed:true});
+  ok(C.submissionStatus(test,"C2",d)==="已提交无异常","明确零异常");
+  ok(C.classify(test,"B2",d).summary!=="已核实到校","零异常不等于到校");
+  C.submitAttendance(test,"C1",d,[{studentId:"A1",category:"未见到",note:"晚间未见"}],{explicitConfirmed:true});
+  ok(C.classify(test,"A1",d).summary==="自报与当晚异常冲突","自报冲突");
+  C.amendPlan(test,"A1","未返校","2026-10-15");
+  ok(C.student(test,"A1").plans.length===2,"计划留痕");
+  C.recordReview(test,"A1",d,"继续跟进","已联系但尚未确认");
+  ok(C.submission(test,"C1",d).exceptions.length===1,"核实不覆盖考勤");
+  try{C.submitAttendance(test,"C1",d,[{studentId:"A1",category:"未见到",note:"晚间未见"}],{explicitConfirmed:true});throw Error("重复提交未阻断")}catch(e){ok(e.message!=="重复提交未阻断","阻断重复提交")}
+  C.approveExport(test,d);ok(C.exportData(test,d).includes("班级提交状态"),"允许导出");
+  C.amendPlan(test,"A2","已返校",d);
+  try{C.exportData(test,d);throw Error("变更后批准仍有效")}catch(e){ok(e.message!=="变更后批准仍有效","变更使批准失效")}
+  notify("业务规则自检通过："+n+" 项。没有上传、读取或更改本页虚构数据。");
+ }catch(e){notify("规则自检失败："+e.message)}
+};
+</script></body></html>
