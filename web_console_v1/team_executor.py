@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import urllib.request
 from agent_profiles import get_agent_profile
-from m11_trial_guard import MODEL as M11_MODEL, MAX_OUTPUT_TOKENS as M11_MAX_TOKENS, request as m11_request, enabled as m11_enabled, TrialBlocked
+from m11_trial_guard import MODEL as M11_MODEL, MAX_OUTPUT_TOKENS as M11_MAX_TOKENS, request as m11_request, enabled as m11_enabled, reserve_codex, finish_codex, TrialBlocked
 from pathlib import Path
 from datetime import datetime
 
@@ -444,15 +444,23 @@ class DynamicTeamRun:
         if step_id != "developer.first" or self.state.get("codex_calls", 0):
             raise TrialBlocked("M11 只允许一次首次开发调用，不能自动返工或重试")
         from codex_checkpoints import execute_codex_step
-        delivery, reused = execute_codex_step(
-            run_dir=self.run_dir,
-            workspace=self.workspace,
-            step_id=step_id,
-            prompt=prompt,
-            schema_path=self.schema,
-            result_path=result_file,
-            executor=run_codex,
-        )
+        reserve_codex(self.draft_id, step_id)
+        try:
+            delivery, reused = execute_codex_step(
+                run_dir=self.run_dir,
+                workspace=self.workspace,
+                step_id=step_id,
+                prompt=prompt,
+                schema_path=self.schema,
+                result_path=result_file,
+                executor=run_codex,
+            )
+        except BaseException:
+            # A local CLI failure can occur after account quota was consumed.
+            # Preserve original evidence and never start another task.
+            finish_codex(self.draft_id, success=False)
+            raise
+        finish_codex(self.draft_id, success=True)
         counted=self.state.setdefault("completed_codex_step_ids",[])
         if not isinstance(counted,list):
             raise RuntimeError("Codex 计数状态异常，禁止重复计数")
