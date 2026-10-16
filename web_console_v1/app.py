@@ -17,6 +17,7 @@ from team_executor import DynamicTeamRun
 from agent_profiles import load_agent_profiles
 from task_state import project_team_status, read_state, atomic_write_json
 from recovery_flow_demo import RecoveryFlowDemo
+from m11_trial_guard import status as m11_trial_status, enabled as m11_trial_enabled
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -750,6 +751,19 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <h4>任务历史</h4>
     <pre id="history">暂无。</pre>
   </details>
+
+  <div class="card" id="m11GateCard">
+    <h3>M11｜首次真实智能体任务 · 费用与调用防火墙</h3>
+    <p>当前默认禁止一切真实 DeepSeek / Codex 请求。人民币 10 元仅为费用预算目标，非服务端扣费硬上限。开启真实请求仍需独立的本机批准与核查。</p>
+    <div class="grid">
+      <div class="stat">调用防火墙<b id="m11Firewall">读取中</b></div>
+      <div class="stat">保守预留（元）<b id="m11Reserve">-</b></div>
+      <div class="stat">请求次数<b id="m11RequestCount">-</b></div>
+      <div class="stat">最大预算目标<b>10 元</b></div>
+    </div>
+    <button onclick="refreshM11Status()" style="background:#475569">只读检查 M11 执行状态</button>
+    <p id="m11StatusNote" style="color:#9a3412">这里不会调用或测试付费模型。</p>
+  </div>
 
   <div class="card">
     <h3>告诉团队你现在想做什么</h3>
@@ -1591,6 +1605,20 @@ async function confirmDraft(){
   document.getElementById('teamCard').style.display='block';
   document.getElementById('executeBadge').textContent='可启动';
   alert('任务草案已确认。现在可以启动动态团队执行。');
+}
+
+async function refreshM11Status(){
+  try{
+    const r=await api('/api/m11/trial-status');
+    const x=r.status||{};
+    document.getElementById('m11Firewall').textContent=x.enabled?(x.frozen?'已冻结':'已启用'):'关闭（安全）';
+    document.getElementById('m11Reserve').textContent=(x.reserved_cny??'0')+' / 10';
+    document.getElementById('m11RequestCount').textContent=(x.calls??0)+' / '+(x.max_calls??5);
+    document.getElementById('m11StatusNote').textContent=x.note||x.error||'没有读取任何真实模型密钥。';
+  }catch(e){
+    document.getElementById('m11Firewall').textContent='无法读取（禁止执行）';
+    document.getElementById('m11StatusNote').textContent=String(e);
+  }
 }
 
 async function startTeamExecution(){
@@ -2468,6 +2496,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok":False,"error":"离线状态测试无法完成："+str(exc)},500)
             return
 
+        if parsed.path=="/api/m11/trial-status":
+            self._json({"ok":True,"status":m11_trial_status()})
+            return
+
         if parsed.path=="/api/executors":
             self._json({"executors":executor_status()})
             return
@@ -2839,6 +2871,15 @@ class Handler(BaseHTTPRequestHandler):
             data=json.loads(body.decode("utf-8"))
         except Exception:
             self._json({"ok":False,"error":"请求格式错误"},400)
+            return
+
+        # M11 trial cannot pay for rework, historic QA resume, or a second
+        # independent legacy orchestrator. Block even if trial is later enabled.
+        if self.path in {
+            "/api/start", "/api/team/manual-rework/start",
+            "/api/team/recovery/qa-only", "/api/team/budget"
+        }:
+            self._json({"ok":False,"error":"M11 禁止旧任务重启、付费恢复、自动/人工返工及追加模型额度"},403)
             return
 
         if self.path=="/api/demo/recovery-flow":
@@ -3793,6 +3834,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path=="/api/team/start":
+            if not m11_trial_enabled() or m11_trial_status().get("frozen"):
+                self._json({"ok":False,"error":"M11 真实模型调用防火墙关闭或冻结；没有执行授权"},403)
+                return
             draft_id=(data.get("draft_id") or "").strip()
             api_key=(data.get("api_key") or get_deepseek_key()).strip()
 
