@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import urllib.request
 from agent_profiles import get_agent_profile
+from m11_trial_guard import MODEL as M11_MODEL, MAX_OUTPUT_TOKENS as M11_MAX_TOKENS, request as m11_request, enabled as m11_enabled, TrialBlocked
 from pathlib import Path
 from datetime import datetime
 
@@ -30,27 +31,20 @@ ROLE_PROMPTS = {
 }
 
 
-def deepseek_json(api_key, system, payload, model="deepseek-chat"):
+def deepseek_json(api_key, system, payload, model=M11_MODEL, *, step_id=None):
+    if not step_id:
+        raise TrialBlocked("DeepSeek 请求没有授权的唯一账本步骤")
     body = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)},
         ],
-        "temperature": 0.1,
+        "thinking": {"type": "disabled"},
+        "max_tokens": M11_MAX_TOKENS,
         "response_format": {"type": "json_object"},
     }
-    req = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = m11_request(api_key, body, step_id, timeout=150)
     return json.loads(data["choices"][0]["message"]["content"]), data.get("usage", {})
 
 
@@ -115,6 +109,14 @@ def run_python_tests(workspace):
 
 
 def run_codex(workspace, prompt, schema_path, result_path):
+    if not m11_enabled():
+        raise TrialBlocked("真实 Codex 开发尚未获 M11 启动授权")
+    # A real run must be the new synthetic isolated workspace, NEVER an existing
+    # counselor tool or a linked production directory.
+    allowed_root = (Path(__file__).resolve().parents[1] / "orchestrator_v1" / "dynamic_runs").resolve()
+    target = Path(workspace).resolve()
+    if not target.is_relative_to(allowed_root) or target.name != "workspace":
+        raise TrialBlocked("首次 Codex 调用只能写新任务独立 workspace")
     codex = codex_path()
     if not codex:
         raise RuntimeError("未找到 Codex CLI")
@@ -265,6 +267,8 @@ class DynamicTeamRun:
         self.draft_id = draft_id
         self.draft = draft
         self.api_key = api_key
+        if m11_enabled() and draft.get("use_real_project"):
+            raise TrialBlocked("M11 首次真实执行必须是新建的隔离试验，不允许绑定真实项目")
         self.run_dir = root / "orchestrator_v1" / "dynamic_runs" / draft_id
         project_cfg = draft.get("project_connection_snapshot") or {}
         self.use_real_project = bool(draft.get("use_real_project") and project_cfg.get("connected"))
@@ -289,7 +293,7 @@ class DynamicTeamRun:
             "codex_calls": 0,
             "deepseek_calls": 0,
             "rework_count": 0,
-            "max_reworks": 2,
+            "max_reworks": 0 if m11_enabled() else 2,
             "budget_approval": None,
             "pending_human_acceptance": False,
             "candidate_synced": False,
@@ -359,7 +363,7 @@ class DynamicTeamRun:
         from step_checkpoints import CheckpointError, inspect_step, reserve_step, finish_step, mark_uncertain
         from task_state import atomic_write_json
 
-        inputs={"role":role,"system":system,"payload":payload,"model":"deepseek-chat"}
+        inputs={"role":role,"system":system,"payload":payload,"model":M11_MODEL}
         probe=inspect_step(self.run_dir,step_id,inputs)
         if probe["decision"] not in {"not_started","reuse_saved_result"}:
             raise CheckpointError(
@@ -384,7 +388,7 @@ class DynamicTeamRun:
                     f"步骤 {step_id} 并发预约被拒绝：{decision['decision']}；不得重复调用模型"
                 )
             try:
-                result,usage=deepseek_json(self.api_key,system,payload)
+                result,usage=deepseek_json(self.api_key,system,payload,step_id="team."+step_id)
                 if not isinstance(result,dict) or not isinstance(usage,dict):
                     raise ValueError("DeepSeek 返回结构不符合预期，结果不确定")
                 self.artifacts.mkdir(parents=True,exist_ok=True)
@@ -435,6 +439,10 @@ class DynamicTeamRun:
 
     def codex_step(self, step_id, prompt, result_file):
         """Guard one Codex call using durable evidence; never replay uncertain work."""
+        if not m11_enabled():
+            raise TrialBlocked("M11 真实 Codex 开发仍处于关闭状态")
+        if step_id != "developer.first" or self.state.get("codex_calls", 0):
+            raise TrialBlocked("M11 只允许一次首次开发调用，不能自动返工或重试")
         from codex_checkpoints import execute_codex_step
         delivery, reused = execute_codex_step(
             run_dir=self.run_dir,
