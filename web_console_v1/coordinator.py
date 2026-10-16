@@ -1,6 +1,6 @@
 import json
 import os
-import urllib.request
+from m11_trial_guard import MODEL, MAX_OUTPUT_TOKENS, request as trial_request
 
 
 SYSTEM_PROMPT = """
@@ -66,27 +66,17 @@ def analyze_goal(goal: str, api_key: str | None = None):
         raise RuntimeError("未设置 DEEPSEEK_API_KEY")
 
     payload = {
-        "model": "deepseek-chat",
+        "model": MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": goal},
         ],
-        "temperature": 0.1,
+        "thinking": {"type": "disabled"},
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "response_format": {"type": "json_object"},
     }
 
-    req = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-        },
-        method="POST",
-    )
-
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = trial_request(key, payload, "coordinator.initial", timeout=120)
 
     result = json.loads(data["choices"][0]["message"]["content"])
     result = normalize_analysis(result)
@@ -155,27 +145,17 @@ def refine_goal(goal: str, previous_analysis: dict, user_reply: str, api_key: st
     }
 
     payload = {
-        "model": "deepseek-chat",
+        "model": MODEL,
         "messages": [
             {"role": "system", "content": REFINE_PROMPT},
             {"role": "user", "content": json.dumps(user_content, ensure_ascii=False, indent=2)},
         ],
-        "temperature": 0.1,
+        "thinking": {"type": "disabled"},
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "response_format": {"type": "json_object"},
     }
 
-    req = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-        },
-        method="POST",
-    )
-
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = trial_request(key, payload, "coordinator.refine", timeout=120)
 
     raw = json.loads(data["choices"][0]["message"]["content"])
 
