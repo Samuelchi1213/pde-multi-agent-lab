@@ -728,6 +728,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;
     <button id="checkpointTestBtn" onclick="checkStepCheckpointRegression()" style="background:#475569;margin-left:8px">验证步骤防重复（离线）</button>
     <button id="modelGuardTestBtn" onclick="checkModelCallGuardRegression()" style="background:#0369a1;margin-left:8px">验证模型调用防重复（模拟）</button>
     <button id="fullReliabilityTestBtn" onclick="checkFullReliabilitySuite()" style="background:#0f766e;margin-left:8px">一键综合验收（全部离线）</button>
+    <button id="m11GuardTestBtn" onclick="checkM11GuardTests()" style="background:#0f766e;margin-left:8px">M11 预算防重复离线自检</button>
     <span id="validationBadge" class="badge">尚未验证</span>
     <pre id="validationResult" style="display:none;margin-top:12px"></pre>
 
@@ -1605,6 +1606,21 @@ async function confirmDraft(){
   document.getElementById('teamCard').style.display='block';
   document.getElementById('executeBadge').textContent='可启动';
   alert('任务草案已确认。现在可以启动动态团队执行。');
+}
+
+async function checkM11GuardTests(){
+  const btn=document.getElementById('m11GuardTestBtn');
+  btn.disabled=true;
+  try{
+    const r=await api('/api/diagnostics/m11/guard-tests');
+    const box=document.getElementById('validationResult');
+    box.style.display='block';
+    box.textContent='M11 账本离线自检：'+(r.passed?'通过':'未通过')+
+      '\\n实际项数：'+(r.test_count??0)+
+      '\\n退出码：'+(r.returncode??'--')+
+      '\\n收费请求：无（仅模拟 transport）\\n'+(r.output||r.error||'');
+  }catch(e){alert('M11 自检失败：'+String(e))}
+  finally{btn.disabled=false}
 }
 
 async function refreshM11Status(){
@@ -2496,6 +2512,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok":False,"error":"离线状态测试无法完成："+str(exc)},500)
             return
 
+        if parsed.path=="/api/diagnostics/m11/guard-tests":
+            try:
+                import re
+                proc=subprocess.run(
+                    [sys.executable,"-m","unittest","discover","-s","web_console_v1",
+                     "-p","test_m11_trial_guard.py","-v"],
+                    cwd=ROOT,capture_output=True,text=True,encoding="utf-8",
+                    errors="replace",timeout=60,check=False
+                )
+                output=(proc.stdout or "")+"\\n"+(proc.stderr or "")
+                counts=re.findall(r"Ran\\s+(\\d+)\\s+tests?",output)
+                n=int(counts[-1]) if counts else 0
+                self._json({"ok":True,"passed":proc.returncode==0 and n==12,
+                            "test_count":n,"returncode":proc.returncode,
+                            "output":output[-12000:],"models_invoked":False})
+            except Exception as exc:
+                self._json({"ok":False,"passed":False,"error":str(exc)},500)
+            return
+
         if parsed.path=="/api/m11/trial-status":
             self._json({"ok":True,"status":m11_trial_status()})
             return
@@ -3268,6 +3303,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok":True})
             return
 
+        if self.path in {"/api/analyze", "/api/refine"} and not m11_trial_enabled():
+            self._json({"ok":False,"error":"M11 真实 DeepSeek 防火墙关闭：未获独立启动授权"},403)
+            return
+
         if self.path=="/api/analyze":
             goal=(data.get("goal") or "").strip()
             api_key=(data.get("api_key") or get_deepseek_key()).strip()
@@ -3845,6 +3884,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             draft=ANALYSES[draft_id]
+            roles=(draft.get("analysis") or {}).get("required_agents") or []
+            if not {"开发智能体","测试智能体"}.issubset(set(roles)):
+                self._json({"ok":False,"error":"M11 真实试验必须由 PDE 实际分配开发与独立测试智能体"},409)
+                return
+            if draft.get("use_real_project"):
+                self._json({"ok":False,"error":"M11 首次试运行必须在全新隔离工作区，不能绑定真实项目"},403)
+                return
             if not draft.get("confirmed"):
                 self._json({"ok":False,"error":"请先确认任务草案"},400)
                 return
