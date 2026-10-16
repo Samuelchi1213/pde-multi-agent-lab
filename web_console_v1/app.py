@@ -2521,8 +2521,8 @@ class Handler(BaseHTTPRequestHandler):
                     cwd=ROOT,capture_output=True,text=True,encoding="utf-8",
                     errors="replace",timeout=60,check=False
                 )
-                output=(proc.stdout or "")+"\\n"+(proc.stderr or "")
-                counts=re.findall(r"Ran\\s+(\\d+)\\s+tests?",output)
+                output=(proc.stdout or "")+"\n"+(proc.stderr or "")
+                counts=re.findall(r"Ran\s+(\d+)\s+tests?",output)
                 n=int(counts[-1]) if counts else 0
                 self._json({"ok":True,"passed":proc.returncode==0 and n==12,
                             "test_count":n,"returncode":proc.returncode,
