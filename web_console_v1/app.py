@@ -2524,7 +2524,7 @@ class Handler(BaseHTTPRequestHandler):
                 output=(proc.stdout or "")+"\n"+(proc.stderr or "")
                 counts=re.findall(r"Ran\s+(\d+)\s+tests?",output)
                 n=int(counts[-1]) if counts else 0
-                self._json({"ok":True,"passed":proc.returncode==0 and n==12,
+                self._json({"ok":True,"passed":proc.returncode==0 and n==14,
                             "test_count":n,"returncode":proc.returncode,
                             "output":output[-12000:],"models_invoked":False})
             except Exception as exc:
