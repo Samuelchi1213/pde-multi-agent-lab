@@ -132,5 +132,26 @@ class TrialGuardTests(unittest.TestCase):
             self.ask(transport=lambda _: self.fail("should not call"))
 
 
+    def test_global_codex_single_use_across_drafts(self):
+        with patch.object(gate, "LEDGER", self.path):
+            gate.reserve_codex("DRAFT-SYNTHETIC-001", "developer.first")
+            with self.assertRaises(gate.TrialBlocked):
+                gate.reserve_codex("DRAFT-SYNTHETIC-002", "developer.first")
+            gate.finish_codex("DRAFT-SYNTHETIC-001", success=True)
+            self.assertEqual(json.loads(self.path.read_text())["codex"]["state"], "finished")
+            with self.assertRaises(gate.TrialBlocked):
+                gate.reserve_codex("DRAFT-SYNTHETIC-002", "developer.first")
+
+    def test_failed_codex_blocks_later_model_calls(self):
+        with patch.object(gate, "LEDGER", self.path):
+            gate.reserve_codex("DRAFT-SYNTHETIC-001", "developer.first")
+            gate.finish_codex("DRAFT-SYNTHETIC-001", success=False)
+            state = json.loads(self.path.read_text())
+            self.assertTrue(state["frozen"])
+            self.assertEqual(state["codex"]["state"], "uncertain")
+            with self.assertRaises(gate.TrialBlocked):
+                self.ask(transport=lambda _: self.fail("must never call model"))
+
+
 if __name__ == "__main__":
     unittest.main()
