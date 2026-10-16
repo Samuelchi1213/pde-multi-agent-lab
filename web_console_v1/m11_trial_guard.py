@@ -75,6 +75,7 @@ def status():
         s = _read(LEDGER)
         requests = s["requests"]
         return {"enabled": enabled(), "frozen": s["frozen"],
+                "codex": (s.get("codex") or {}).get("state", "not_started"),
                 "model": MODEL, "budget_cny": str(BUDGET_CNY),
                 "reserved_cny": str(sum(
                     (Decimal(v["reserved_cny"]) for v in requests.values()), Decimal(0))),
@@ -185,3 +186,38 @@ def request(api_key, payload, step, *, timeout=150, transport=None, _test_path=N
         finally:
             _unlock(guard)
         raise
+
+
+def reserve_codex(task_id, step_id):
+    """One Codex execution across the entire M11 trial, not once per draft."""
+    if not enabled():
+        raise TrialBlocked("M11 未启用，禁止执行 Codex")
+    if step_id != "developer.first" or not str(task_id).startswith("DRAFT-"):
+        raise TrialBlocked("非首轮或历史任务不得执行 M11 Codex")
+    guard = _lock(LEDGER)
+    try:
+        state = _read(LEDGER)
+        if state["frozen"] or state.get("codex"):
+            raise TrialBlocked("M11 已执行/预约过 Codex 或试运行冻结，禁止再次开发")
+        if any(v["state"] == "reserved" for v in state["requests"].values()):
+            raise TrialBlocked("DeepSeek 尚有未完成请求，不能启动 Codex")
+        state["codex"] = {"task_id": task_id, "step": step_id, "state": "reserved"}
+        _atomic(LEDGER, state)
+    finally:
+        _unlock(guard)
+
+
+def finish_codex(task_id, *, success):
+    """Mark success or freeze on ambiguous/failed Codex invocation."""
+    guard = _lock(LEDGER)
+    try:
+        state = _read(LEDGER)
+        record = state.get("codex")
+        if not record or record["task_id"] != task_id or record["state"] != "reserved":
+            raise TrialBlocked("Codex 全局回执与预约不符，必须人工核查")
+        record["state"] = "finished" if success else "uncertain"
+        if not success:
+            state["frozen"] = True
+        _atomic(LEDGER, state)
+    finally:
+        _unlock(guard)
