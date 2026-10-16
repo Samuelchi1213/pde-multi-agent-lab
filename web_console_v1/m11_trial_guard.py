@@ -123,6 +123,8 @@ def request(api_key, payload, step, *, timeout=150, transport=None, _test_path=N
         state = _read(path)
         if state["frozen"]:
             raise TrialBlocked("上次请求结果不确定，M11 已冻结")
+        if any(v["state"] == "reserved" for v in state["requests"].values()):
+            raise TrialBlocked("存在未完成的 DeepSeek 请求，禁止并发或在断线后重复调用")
         if step in state["requests"]:
             raise TrialBlocked("步骤已存在计费预约，禁止重复调用，即使上次已成功")
         if len(state["requests"]) >= MAX_CALLS:
