@@ -112,18 +112,18 @@
 
 ### 已提交的代码变更
 
-- 新增 `web_console_v1/m11_trial_guard.py`：默认关闭的 `PDE_M11_TRIAL_ENABLED` 执行防火墙。协调分析、产品、架构和 QA 等 DeepSeek 请求使用**同一份持久账本** `orchestrator_v1/runtime/m11_budget_ledger.json`，不能各用各的 token 预算；本轮最多 **5 条**实际 DeepSeek 请求。
+- 新增 `web_console_v1/m11_trial_guard.py`：默认关闭的 `PDE_M11_TRIAL_ENABLED` 执行防火墙。协调分析、产品、架构和 QA 等 DeepSeek 请求使用**同一份持久账本** `orchestrator_v1/runtime/m11_budget_ledger.json`，不能各用各的 token 预算；本轮最多 **5 条**实际 DeepSeek 请求，另有**全局一次** Codex 调用预约，不能通过换草案重复执行。
 - 使用当前 DeepSeek 文档模型 `deepseek-flash`，请求强制 `thinking: disabled` 和 `max_tokens: 4096`，非流式。用 2026-10 官方公布的人民币高峰价（缓存未命中输入 2 元/百万 token、输出 8 元/百万 token）及 **4 倍保守系数**进行请求前预算预留，累计不得超过 **10 元预算目标**。按 JSON 的 UTF-8 字节数估计输入用量不等于供应商 tokenizer 上限；这些保护**不是 DeepSeek 供应商侧绝对扣费限额**。官方文档：https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ 和 https://api-docs.deepseek.com/api/create-chat-completion/
 - 请求发送前持久保存每一步的独立计费预约，收到供应商含 usage 的完整回执才标完成；未获回执、超时或结果不确定时全局冻结。不同角色如果前一个请求仍在预约中，就禁止并发；历史步骤重复发起始终拒绝。
 - `web_console_v1/coordinator.py` 的分析及补充分析经过共享账本，旧 `deepseek-chat` 被替换为 `deepseek-flash`，**分析按钮已经纳入预算防火墙**。
 - `web_console_v1/team_executor.py` 的产品/架构/测试请求经过同一防火墙；初次真实任务 `max_reworks=0`；真实 Codex 仅允许 `developer.first` 一次且工作区位于本项目 `orchestrator_v1/dynamic_runs/.../workspace`，不允许直接写入现有业务工作台。仍需在 Windows 核实当前 CLI 是否支持执行器硬编码的 `gpt-5.6-sol` 模型。
 - `web_console_v1/app.py`：新增只读 `GET /api/m11/trial-status`、首页 M11 防火墙卡；关闭状态下直接拒绝「让项目协调智能体分析」以及启动团队；禁止旧任务重启、历史付费 QA 恢复、手动返工及预算追加路由。启动前还检查草案含真正的开发/测试角色，且没有绑定真实项目。
-- 新增 `web_console_v1/test_m11_trial_guard.py` **12 项离线单测**（使用纯模拟 transport）：默认拒绝、预约与结果留档、重复请求、异常冻结、并发阻断、旧模型/超长输出拒绝、五次调用上限、异常账本等。诊断工具中新增「M11 预算防重复离线自检」，经 `GET /api/diagnostics/m11/guard-tests` 执行；不会调用任何真实模型。
+- 新增 `web_console_v1/test_m11_trial_guard.py` **14 项离线单测**（使用纯模拟 transport）：默认拒绝、预约与结果留档、重复请求、异常冻结、并发阻断、旧模型/超长输出拒绝、五次调用上限、异常账本等。诊断工具中新增「M11 预算防重复离线自检」，经 `GET /api/diagnostics/m11/guard-tests` 执行；不会调用任何真实模型。
 
 ### 仍然不满足、不可承诺的事情
 
 - 以上是**软件侧尽力限制**；缺少 DeepSeek 账户层面的真正消费上限证明，价格未来可能变化，且同账户其他应用费用不可完全控制，因此**不能保证供应商实际扣费绝对不超过 10 元**。
-- 尚未在用户 Windows 上跑完新加入的 12 项单测和既有回归；也未验证 DeepSeek API 当前鉴权、Codex 目标模型可用性以及实际 CSV 程序开发成果。代码提交不等于验收完成。
+- 尚未在用户 Windows 上跑完新加入的 14 项单测和既有回归；也未验证 DeepSeek API 当前鉴权、Codex 目标模型可用性以及实际 CSV 程序开发成果。代码提交不等于验收完成。
 - 本次无真实模型请求：没有设置 `PDE_M11_TRIAL_ENABLED=1`，没有发送 DeepSeek 或 Codex 调用；**不得因为用户此前选 10 元就自动开启执行开关**。
 - 目前尚未提供和验证费用用量对应的供应商真实账单收据核对；上线正式使用前需补充账户余额/账单审计，以及首次任务专属启用和停用手续。旧的 M9/M10 业务原型保留，不因此获得真实学生数据权限。
 
@@ -131,7 +131,12 @@
 
 1. Windows PDE「检查更新」→「立即更新」，完全退出并重启。
 2. 找到首页「M11 首次真实智能体任务 · 费用与调用防火墙」，点「只读检查 M11 执行状态」，预期 **关闭（安全）**、已用请求 0、预算目标 10 元。若存在历史账本或状态异常，不可重置/覆盖，应人工核查。
-3. 展开「开发 / 诊断工具」，点「M11 预算防重复离线自检」，预期 **12 项通过、退出码 0、模型请求无**；本机测试结果才是本轮防护的验收依据。
+3. 展开「开发 / 诊断工具」，点「M11 预算防重复离线自检」，预期 **14 项通过、退出码 0、模型请求无**；本机测试结果才是本轮防护的验收依据。
 4. **绝不在本轮点「让项目协调智能体分析」或「开始执行」**。在代码验证、供应商鉴权与 10 元预算约束的残余风险确认之前，这两者仍应阻断。
 
 M11 真实多 Agent 开发工作尚未开始；初次真实运行许可需在下一轮另外明确确认。
+
+
+### 开发端最后一次安全审查补充
+- 发现并堵住跨任务重复调用问题：新加入 `reserve_codex(task_id, step_id)` 及 `finish_codex()`，在唯一全局 M11 账本里持久预约 Codex 首次开发；即使更换另一份已确认草案，也不能再次调用 Codex。异常结束将冻结整个任务。
+- 离线测试总数由 12 项扩展到 **14 项**；测试状态仍是**待用户 Windows 执行**，不能冒充已经通过。
